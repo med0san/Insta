@@ -414,7 +414,7 @@ $('#quotaRange').oninput = e => { $('#quotaNum').value = e.target.value; schedul
 $('#quotaNum').onchange = e => { const v = Math.max(1, Math.min(200, +e.target.value || 1)); e.target.value = v; scheduleSave({ daily_quota: v }); renderConfig(); };
 $('#pphRange').oninput = e => { $('#pphVal').textContent = e.target.value; scheduleSave({ posts_per_hashtag: +e.target.value }); };
 const API_PRESETS = {
-  gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-flash-latest', hint: 'Clé gratuite sans carte bancaire : <span class="text-neutral-300">aistudio.google.com/apikey</span>' },
+  gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash', hint: 'Clé gratuite sans carte bancaire : <span class="text-neutral-300">aistudio.google.com/apikey</span>' },
   groq: { base: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile', hint: 'Clé gratuite : <span class="text-neutral-300">console.groq.com/keys</span> (texte seul : ne lit pas l\'image)' },
   openrouter: { base: 'https://openrouter.ai/api/v1', model: 'google/gemma-3-27b-it:free', hint: 'Clé gratuite : <span class="text-neutral-300">openrouter.ai/keys</span>' },
   pollinations: { base: 'https://text.pollinations.ai/openai', model: 'openai', hint: 'Sans clé ni compte. Service public : les légendes (publiques) transitent par un tiers.' },

@@ -562,6 +562,10 @@ async def _api_request(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str
                 try:
                     return await asyncio.to_thread(_api_chat, base, key, payload, 90)
                 except urllib.error.HTTPError as e:
+                    if e.code in (500, 502, 503, 504) and attempt == 0:
+                        bus.log(f"API : service momentanément surchargé ({e.code}), nouvel essai dans 6s.", "warning")
+                        await asyncio.sleep(6)
+                        continue
                     if e.code == 429 and attempt == 0:
                         delay = min(float(e.headers.get("Retry-After") or 15), 30)
                         bus.log(f"API : limite atteinte (429), nouvel essai dans {delay:.0f}s.", "warning")
@@ -571,6 +575,7 @@ async def _api_request(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str
                         # le modèle refuse peut-être l'image ou response_format : on simplifie
                         payload = json.loads(json.dumps(payload))
                         payload.pop("response_format", None)
+                        payload.pop("reasoning_effort", None)
                         for m in payload["messages"]:
                             if isinstance(m.get("content"), list):
                                 m["content"] = "\n".join(c.get("text", "") for c in m["content"] if c.get("type") == "text")
@@ -595,7 +600,7 @@ async def _api_analyze(caption, author, post_date, image_b64, cfg) -> dict[str, 
             {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + image_b64}},
         ]
     payload = {
-        "model": cfg.get("api_model") or "gemini-flash-latest",
+        "model": cfg.get("api_model") or "gemini-2.5-flash",
         "temperature": 0.2,
         "response_format": {"type": "json_object"},
         "messages": [
@@ -603,6 +608,8 @@ async def _api_analyze(caption, author, post_date, image_b64, cfg) -> dict[str, 
             {"role": "user", "content": content},
         ],
     }
+    if "generativelanguage.googleapis.com" in (cfg.get("api_base_url") or ""):
+        payload["reasoning_effort"] = "low"  # Gemini « réfléchit » sinon longuement : inutile pour cette tâche
     data = await _api_request(cfg, payload)
     return _extract_json(data["choices"][0]["message"]["content"])
 
@@ -612,12 +619,14 @@ async def api_status(cfg: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "message": "Adresse de l'API manquante."}
     payload = {
         "model": cfg.get("api_model") or "",
-        "max_tokens": 8,
+        "max_tokens": 200,
         "messages": [{"role": "user", "content": "Réponds juste : OK"}],
     }
+    if "generativelanguage.googleapis.com" in (cfg.get("api_base_url") or ""):
+        payload["reasoning_effort"] = "none"
     try:
         data = await _api_request(cfg, payload)
-        reply = str(data["choices"][0]["message"]["content"]).strip()[:40]
+        reply = str(data["choices"][0]["message"].get("content") or "").strip()[:40] or "(vide)"
         return {"ok": True, "message": f"API opérationnelle (réponse : « {reply} »)."}
     except urllib.error.HTTPError as e:
         hint = " Clé API refusée ou manquante." if e.code in (401, 403) else ""

@@ -22,7 +22,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "ollama_model": "gemma3:4b",
     "ollama_url": "http://localhost:11434",
     "api_base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
-    "api_model": "gemini-flash-latest",
+    "api_model": "gemini-2.5-flash",
     "api_key": "",             # clé gratuite (stockée localement en clair), vide pour les services sans clé
     "default_answer": "Le premier cadeau me fait trop envie 😍",  # réponse aux questions posées en commentaire
     "ig_username": "",
@@ -50,6 +50,9 @@ async def init_db() -> None:
             )"""
         )
         await db.execute("CREATE INDEX IF NOT EXISTS idx_history_created ON history(created_at)")
+        # migration : l'alias « gemini-flash-latest » était souvent surchargé (503)
+        await db.execute("UPDATE config SET value = ? WHERE key = 'api_model' AND value = ?",
+                         (json.dumps("gemini-2.5-flash"), json.dumps("gemini-flash-latest")))
         for key, value in DEFAULT_CONFIG.items():
             await db.execute(
                 "INSERT OR IGNORE INTO config(key, value) VALUES (?, ?)", (key, json.dumps(value))

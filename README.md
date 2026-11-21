@@ -86,7 +86,7 @@ Trois modes (réglage « Lecture des conditions ») :
 
 | Service | Clé | Image | Remarque |
 |---|---|---|---|
-| **Google Gemini** | gratuite, sans carte : [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | oui | meilleur choix |
+| **Google Gemini** (`gemini-2.5-flash`) | gratuite, sans carte : [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | oui | meilleur choix |
 | Groq | gratuite : [console.groq.com/keys](https://console.groq.com/keys) | non (texte) | très rapide |
 | OpenRouter | gratuite : [openrouter.ai/keys](https://openrouter.ai/keys) | oui (modèles `:free`) | |
 | Pollinations | **aucune** | non | service public, qualité et disponibilité variables |
