@@ -172,8 +172,9 @@ def _build_date(day: int, month: int, year: int | None, ref: date) -> date | Non
     return d
 
 
-def _find_end_date(norm: str, ref: date) -> date | None:
-    candidates: list[date] = []
+def _find_end_date(norm: str, ref: date) -> tuple[date, str] | None:
+    """Date de fin la plus tardive et l'extrait de légende dont elle provient."""
+    candidates: list[tuple[date, str]] = []
     for idx, pattern in enumerate(DATE_PATTERNS):
         for m in pattern.finditer(norm):
             context = norm[max(0, m.start() - 45): m.start()]
@@ -188,8 +189,9 @@ def _find_end_date(norm: str, ref: date) -> date | None:
                 day, month, year = int(g[1]), MONTHS[g[0]], int(g[2]) if g[2] else None
             d = _build_date(day, month, year, ref)
             if d:
-                candidates.append(d)
-    return max(candidates) if candidates else None
+                snippet = re.sub(r"\s+", " ", norm[max(0, m.start() - 30): m.end()]).strip()
+                candidates.append((d, snippet))
+    return max(candidates, key=lambda c: c[0]) if candidates else None
 
 
 # ---------------------------------------------------------------------------
@@ -274,11 +276,11 @@ def _scan_conditions(caption: str, keyword: str | None) -> tuple[list[str], str 
         optional = bool(OPTIONAL_RE.search(ns))
         if not optional:
             if STORY_RE.search(ns):
-                unsupported.append("partage en story / republication / message privé obligatoire")
+                unsupported.append(f"partage en story / republication / message privé obligatoire (phrase : « {re.sub(chr(10), ' ', s)[:100]} »)")
             else:
                 m = OTHER_PLATFORM_RE.search(ns)
                 if m and (FOLLOW_RE.search(ns) or JOIN_RE.search(ns)):
-                    unsupported.append(f"abonnement obligatoire sur une autre plateforme ({m.group(1)})")
+                    unsupported.append(f"abonnement obligatoire sur une autre plateforme ({m.group(1)}) (phrase : « {s[:100]} »)")
         is_question = bool(QUESTION_RE.search(ns)) or (
             s.rstrip().endswith("?") and not re.search(r"participer|gagner|how to|comment faire|concours|giveaway", ns)
         )
@@ -362,11 +364,15 @@ def analyze_sync(caption: str, author: str | None = None, post_date: str | None 
         result["_hard_inactive"] = True
         return result
 
-    end = _find_end_date(norm, ref)
-    if end:
+    found = _find_end_date(norm, ref)
+    if found:
+        end, snippet = found
         details.append(f"fin le {end.strftime('%d/%m/%Y')}")
         if end < today:
-            result["reason"] = f"Concours expiré (fin le {end.strftime('%d/%m/%Y')})."
+            result["reason"] = (
+                f"Concours expiré : fin le {end.strftime('%d/%m/%Y')} (déjà passée au {today.strftime('%d/%m/%Y')}), "
+                f"d'après l'extrait « …{snippet}… »."
+            )
             result["_hard_inactive"] = True
             return result
     elif posted and (today - posted).days > 45:
