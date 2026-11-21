@@ -3,24 +3,40 @@ from __future__ import annotations
 
 import asyncio
 import random
+import time
+from datetime import datetime, timedelta
 from typing import Any
 
 import db
 import instagram as ig
+import keepawake
 from analyzer import AnalyzerError, analyze_caption
 from auth import auth
 from logbus import bus
 
 ACTION_DELAY = (3.0, 9.0)        # entre deux actions
 GIVEAWAY_DELAY = (45.0, 120.0)   # entre deux concours
-CYCLE_PAUSE = (900.0, 1800.0)    # après avoir parcouru tous les hashtags
+CYCLE_PAUSE = (900.0, 1800.0)    # entre deux scans quand il n'y avait rien de nouveau
+BUSY_CYCLE_PAUSE = (180.0, 480.0)  # entre deux scans quand le dernier en a trouvé du nouveau
 FAST_ACTION = (1.5, 4.0)          # préréglage « rapide »
 FAST_GIVEAWAY = (10.0, 25.0)
 GENERIC_COMMENT = "Je participe ! 🍀"  # si le concours exige un commentaire sans autre précision
+BLOCK_COOLDOWN_MIN = 120          # pause après un « Action bloquée », puis reprise automatique
+MAX_BLOCKS_24H = 3                # au-delà, le bot s'arrête pour de bon
+MAX_FAILURES = 8                  # cycles consécutifs en erreur avant arrêt
+MAX_POST_ERRORS = 6               # posts consécutifs en erreur avant redémarrage du navigateur
 
 
 class StopBot(Exception):
     pass
+
+
+class FatalStop(Exception):
+    """Arrêt définitif décidé par le bot lui-même (trop de blocages, trop d'échecs)."""
+
+
+def _clock(ts: float) -> str:
+    return datetime.fromtimestamp(ts).strftime("%H:%M")
 
 
 class Bot:
@@ -29,13 +45,15 @@ class Bot:
         self.stop_event = asyncio.Event()
         self.activity: str = "À l'arrêt"
         self.last_error: str | None = None
+        self.cycles = 0
+        self.blocks: list[float] = []
 
     @property
     def running(self) -> bool:
         return self.task is not None and not self.task.done()
 
     def snapshot(self) -> dict[str, Any]:
-        return {"running": self.running, "activity": self.activity, "last_error": self.last_error}
+        return {"running": self.running, "activity": self.activity, "last_error": self.last_error, "cycles": self.cycles}
 
     def _set_activity(self, text: str) -> None:
         self.activity = text
@@ -64,15 +82,17 @@ class Bot:
             pass
         return {"ok": True}
 
-    async def _sleep(self, a: float, b: float, label: str | None = None) -> None:
-        seconds = random.uniform(a, b)
+    async def _sleep_for(self, seconds: float, label: str | None = None) -> None:
         if label:
             bus.log(f"{label} : pause de {seconds:.0f}s", "debug")
         try:
-            await asyncio.wait_for(self.stop_event.wait(), timeout=seconds)
+            await asyncio.wait_for(self.stop_event.wait(), timeout=max(0.0, seconds))
         except asyncio.TimeoutError:
             return
         raise StopBot()
+
+    async def _sleep(self, a: float, b: float, label: str | None = None) -> None:
+        await self._sleep_for(random.uniform(a, b), label)
 
     @staticmethod
     def _pace(cfg: dict[str, Any]) -> tuple[tuple[float, float], tuple[float, float]]:
@@ -85,74 +105,131 @@ class Bot:
         if self.stop_event.is_set():
             raise StopBot()
 
-    # -- boucle -------------------------------------------------------------
+    # -- boucle autonome ------------------------------------------------------
     async def _run(self) -> None:
         cfg = await db.get_config()
         mode = "DRY-RUN (simulation)" if cfg["dry_run"] else "RÉEL"
-        bus.log(f"Démarrage du bot — mode {mode}", "success")
+        quota = int(cfg.get("daily_quota") or 0)
+        bus.log(f"Démarrage du bot — mode {mode} — mode autonome", "success")
         bus.log(
-            f"Options : participer quand même = {'OUI' if cfg.get('force_participate', True) else 'NON (les concours avec condition impossible sont ignorés)'}"
+            f"Options : plafond = {quota if quota > 0 else 'AUCUN'}"
+            f" · participer quand même = {'OUI' if cfg.get('force_participate', True) else 'NON'}"
             f" · story/republication = {'OUI' if cfg.get('do_story', True) else 'NON'}"
             f" · analyse = {cfg.get('analyzer_mode', 'rules')} · vitesse = {cfg.get('speed', 'human')}",
             "info",
         )
-        self._set_activity("Ouverture du navigateur")
+        if keepawake.enable():
+            bus.log("Mise en veille du PC empêchée tant que le bot tourne.", "info")
+        failures = 0
         try:
-            ctx = await ig.browser.acquire("bot", headless=bool(cfg.get("headless", True)))
-        except Exception as e:
+            while True:
+                self._check_stop()
+                cfg = await db.get_config()
+                try:
+                    handled = await self._browser_cycle(cfg)
+                    failures = 0
+                except (StopBot, asyncio.CancelledError, ig.SessionExpired):
+                    raise
+                except ig.InstagramBlocked as e:
+                    await self._on_block(e, cfg)
+                    continue
+                except Exception as e:  # noqa: BLE001
+                    failures += 1
+                    self.last_error = f"{type(e).__name__}: {e}"
+                    bus.log(
+                        f"Erreur : {self.last_error} (échec {failures}/{MAX_FAILURES}) — "
+                        "le navigateur est relancé et le bot continue.", "error",
+                    )
+                    if failures >= MAX_FAILURES:
+                        raise FatalStop(f"{MAX_FAILURES} échecs consécutifs : {self.last_error}") from e
+                    self._set_activity("Erreur — nouvel essai bientôt")
+                    await self._sleep_for(min(60 * failures, 600))
+                    continue
+                self.cycles += 1
+                seconds = random.uniform(*(BUSY_CYCLE_PAUSE if handled else CYCLE_PAUSE))
+                at = _clock(datetime.now().timestamp() + seconds)
+                self._set_activity(f"Pause — prochain scan à {at}")
+                bus.log(
+                    f"Cycle {self.cycles} terminé ({handled} post(s) examiné(s)). Prochain scan vers {at}.", "info",
+                )
+                await self._sleep_for(seconds)
+        except (StopBot, asyncio.CancelledError):
+            bus.log("Bot arrêté.", "warning")
+        except ig.SessionExpired as e:
             self.last_error = str(e)
-            bus.log(f"Impossible d'ouvrir le navigateur : {e}", "error")
+            auth._set_connected(False)
+            bus.log(f"{e} Reconnectez-vous puis relancez le bot. Arrêt.", "error")
+        except FatalStop as e:
+            self.last_error = str(e)
+            bus.log(f"⛔ {e} Arrêt du bot.", "error")
+        finally:
+            keepawake.disable()
+            await ig.browser.release()
             self._set_activity("À l'arrêt")
-            return
+            if not self.stop_event.is_set():       # arrêt décidé par le bot : on ne le relancera pas tout seul
+                await db.set_config({"bot_enabled": False})
+            bus.notify("history")
+            bus.notify("status")
+
+    async def _browser_cycle(self, cfg: dict[str, Any]) -> int:
+        """Ouvre un navigateur neuf, fait un passage complet sur les hashtags, puis le ferme."""
+        self._set_activity("Ouverture du navigateur")
+        ctx = await ig.browser.acquire("bot", headless=bool(cfg.get("headless", True)))
         try:
             if not await ig.has_session_cookie(ctx):
                 auth._set_connected(False)
                 raise ig.SessionExpired("Aucune session Instagram : connectez-vous d'abord.")
             auth._set_connected(True)
             page = await ig.get_page(ctx)
-            while True:
-                await self._cycle(page)
-                self._set_activity("Pause entre deux cycles")
-                await self._sleep(*CYCLE_PAUSE, label="Cycle terminé, nouveau scan plus tard")
-        except StopBot:
-            bus.log("Bot arrêté.", "warning")
-        except asyncio.CancelledError:
-            bus.log("Bot arrêté.", "warning")
-        except ig.InstagramBlocked as e:
-            self.last_error = str(e)
-            bus.log(f"⛔ ACTION BLOQUÉE — {e}. Arrêt immédiat du bot.", "error")
-        except ig.SessionExpired as e:
-            self.last_error = str(e)
-            auth._set_connected(False)
-            bus.log(f"{e} Arrêt du bot.", "error")
-        except AnalyzerError as e:
-            self.last_error = str(e)
-            bus.log(f"Erreur d'analyse : {e}. Arrêt du bot.", "error")
-        except Exception as e:  # noqa: BLE001
-            self.last_error = f"{type(e).__name__}: {e}"
-            bus.log(f"Erreur inattendue : {self.last_error}. Arrêt du bot.", "error")
+            return await self._cycle(page)
         finally:
             await ig.browser.release()
-            self._set_activity("À l'arrêt")
-            bus.notify("history")
+
+    async def _on_block(self, err: Exception, cfg: dict[str, Any]) -> None:
+        now = time.time()
+        self.blocks = [t for t in self.blocks if now - t < 86400] + [now]
+        self.last_error = str(err)
+        if len(self.blocks) >= MAX_BLOCKS_24H:
+            raise FatalStop(f"{len(self.blocks)} blocages Instagram en 24 h : arrêt pour ne pas aggraver la restriction.")
+        minutes = max(10, int(cfg.get("block_cooldown_min") or BLOCK_COOLDOWN_MIN))
+        bus.log(
+            f"⛔ ACTION BLOQUÉE ({err}) — blocage {len(self.blocks)}/{MAX_BLOCKS_24H} en 24 h. "
+            f"Pause de {minutes} min puis reprise automatique vers {_clock(now + minutes * 60)}.",
+            "error",
+        )
+        self._set_activity(f"Blocage Instagram — reprise vers {_clock(now + minutes * 60)}")
+        await self._sleep_for(minutes * 60)
 
     async def _quota_reached(self, cfg: dict[str, Any]) -> bool:
+        quota = int(cfg.get("daily_quota") or 0)
+        if quota <= 0:                       # 0 = aucun plafond
+            return False
         status = ("Simulé",) if cfg["dry_run"] else ("Participé", "Partiel")
-        done = await db.count_today(status)
-        return done >= int(cfg["daily_quota"])
+        return await db.count_today(status) >= quota
 
-    async def _cycle(self, page) -> None:
+    async def _respect_quota(self, cfg: dict[str, Any]) -> dict[str, Any]:
+        """Plafond optionnel : s'il est atteint, on attend demain au lieu de s'arrêter."""
+        while await self._quota_reached(cfg):
+            now = datetime.now()
+            resume = (now + timedelta(days=1)).replace(hour=0, minute=5, second=0, microsecond=0)
+            bus.log(f"Plafond journalier atteint ({cfg['daily_quota']}) : pause jusqu'à {resume.strftime('%H:%M')} demain.", "success")
+            self._set_activity(f"Plafond atteint — reprise à {resume.strftime('%H:%M')}")
+            await self._sleep_for((resume - now).total_seconds())
+            cfg = await db.get_config()
+        return cfg
+
+    async def _cycle(self, page) -> int:
+        """Un passage sur tous les hashtags. Renvoie le nombre de posts examinés."""
         cfg = await db.get_config()
         hashtags = [h.strip().lstrip("#") for h in cfg["hashtags"] if h.strip()]
         if not hashtags:
             bus.log("Aucun hashtag configuré.", "warning")
-            return
+            return 0
+        examined = 0
+        post_errors = 0
         for tag in hashtags:
             self._check_stop()
-            cfg = await db.get_config()  # la config est relue en direct
-            if await self._quota_reached(cfg):
-                bus.log(f"Quota journalier atteint ({cfg['daily_quota']}). Arrêt du bot.", "success")
-                raise StopBot()
+            cfg = await self._respect_quota(await db.get_config())  # la config est relue en direct
             self._set_activity(f"Scan #{tag}")
             bus.log(f"🔎 Scan du hashtag #{tag}…")
             limit = int(cfg.get("posts_per_hashtag", 12))
@@ -161,16 +238,27 @@ class Bot:
             bus.log(f"#{tag} : {len(urls)} posts trouvés, {len(new_urls)} nouveaux.")
             for url in new_urls:
                 self._check_stop()
-                cfg = await db.get_config()
-                if await self._quota_reached(cfg):
-                    bus.log(f"Quota journalier atteint ({cfg['daily_quota']}). Arrêt du bot.", "success")
-                    raise StopBot()
-                participated = await self._process_post(page, url, tag, cfg)
+                cfg = await self._respect_quota(await db.get_config())
+                examined += 1
+                try:
+                    participated = await self._process_post(page, url, tag, cfg)
+                    post_errors = 0
+                except (ig.InstagramBlocked, ig.SessionExpired, StopBot, asyncio.CancelledError):
+                    raise
+                except Exception as e:  # noqa: BLE001  — un post en erreur ne doit jamais arrêter le bot
+                    post_errors += 1
+                    await db.add_history(url, None, tag, "Erreur", f"{type(e).__name__}: {str(e)[:150]}")
+                    bus.log(f"Erreur sur {url} : {type(e).__name__}: {e} — on passe au suivant.", "error")
+                    bus.notify("history")
+                    if post_errors >= MAX_POST_ERRORS:
+                        raise RuntimeError(f"{post_errors} posts consécutifs en erreur") from e
+                    participated = False
                 if participated:
                     await self._sleep(*self._pace(cfg)[1], label="Délai anti-détection entre concours")
                 else:
                     await self._sleep(*self._pace(cfg)[0])
             await self._sleep(*self._pace(cfg)[0])
+        return examined
 
     async def _process_post(self, page, url: str, tag: str, cfg: dict[str, Any]) -> bool:
         self._set_activity(f"Lecture {url}")

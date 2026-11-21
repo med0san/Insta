@@ -14,13 +14,15 @@ DB_PATH = BASE_DIR / "giveaways.db"
 DEFAULT_CONFIG: dict[str, Any] = {
     "friends_to_tag": [],
     "hashtags": ["concours", "jeuconcours", "giveawayfr"],
-    "daily_quota": 10,
+    "daily_quota": 0,          # 0 = aucun plafond journalier
     "dry_run": True,
     "headless": True,          # navigateur invisible pendant que le bot tourne
     "posts_per_hashtag": 12,   # nombre max de posts examinés par hashtag et par cycle
     "analyzer_mode": "rules",  # "rules" (gratuit, hors ligne) ou "ollama" (modèle local gratuit)
     "ollama_model": "gemma3:4b",
     "ollama_url": "http://localhost:11434",
+    "bot_enabled": False,      # le bot doit tourner : relancé automatiquement si le serveur redémarre
+    "block_cooldown_min": 120, # pause (minutes) après un « Action bloquée », puis reprise automatique
     "do_story": True,          # republier / mettre en story quand le concours le demande
     "force_participate": True, # participer même si une condition est impossible (participation partielle)
     "speed": "human",          # "human" (3-9 s / 45-120 s) ou "fast" (1,5-4 s / 10-25 s)
@@ -58,6 +60,12 @@ async def init_db() -> None:
         for col in ("caption", "actions"):          # migration des bases existantes
             if col not in cols:
                 await db.execute(f"ALTER TABLE history ADD COLUMN {col} TEXT")
+        # migration unique : l'ancien plafond (10) est supprimé, le bot est désormais illimité
+        async with db.execute("SELECT 1 FROM config WHERE key = 'quota_removed'") as cur:
+            done = await cur.fetchone()
+        if not done:
+            await db.execute("INSERT OR REPLACE INTO config(key, value) VALUES ('daily_quota', ?)", (json.dumps(0),))
+            await db.execute("INSERT OR REPLACE INTO config(key, value) VALUES ('quota_removed', ?)", (json.dumps(True),))
         # migration : l'alias « gemini-flash-latest » était souvent surchargé (503)
         await db.execute("UPDATE config SET value = ? WHERE key = 'api_model' AND value = ?",
                          (json.dumps("gemini-2.5-flash"), json.dumps("gemini-flash-latest")))

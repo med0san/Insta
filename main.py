@@ -27,10 +27,21 @@ async def lifespan(app: FastAPI):
     await db.init_db()
     bus.log("Serveur démarré.", "success")
     asyncio.create_task(auth.refresh())
+    cfg = await db.get_config()
+    if cfg.get("bot_enabled"):       # le bot tournait avant l'arrêt / le plantage du serveur : on le relance
+        asyncio.create_task(_resume_bot())
     yield
     if bot.running:
         await bot.stop()
     await ig.browser.release()
+
+
+async def _resume_bot() -> None:
+    await asyncio.sleep(3)
+    bus.log("Reprise automatique du bot (il tournait avant le redémarrage du serveur).", "warning")
+    res = await bot.start()
+    if not res["ok"]:
+        bus.log(f"Reprise automatique impossible : {res['message']}", "error")
 
 
 app = FastAPI(title="Insta Giveaway Bot", lifespan=lifespan)
@@ -43,10 +54,11 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 class ConfigIn(BaseModel):
     friends_to_tag: list[str] | None = None
     hashtags: list[str] | None = None
-    daily_quota: int | None = Field(default=None, ge=1, le=500)
+    daily_quota: int | None = Field(default=None, ge=0, le=1_000_000)
     dry_run: bool | None = None
     headless: bool | None = None
-    posts_per_hashtag: int | None = Field(default=None, ge=1, le=50)
+    posts_per_hashtag: int | None = Field(default=None, ge=1, le=200)
+    block_cooldown_min: int | None = Field(default=None, ge=10, le=1440)
     do_story: bool | None = None
     force_participate: bool | None = None
     speed: Literal["human", "fast"] | None = None
@@ -214,11 +226,13 @@ async def bot_start():
     res = await bot.start()
     if not res["ok"]:
         raise HTTPException(409, res["message"])
+    await db.set_config({"bot_enabled": True})
     return res
 
 
 @app.post("/api/bot/stop")
 async def bot_stop():
+    await db.set_config({"bot_enabled": False})   # arrêt voulu : pas de reprise automatique
     return await bot.stop()
 
 

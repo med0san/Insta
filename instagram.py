@@ -311,7 +311,7 @@ async def collect_hashtag_posts(page: Page, tag: str, limit: int) -> list[str]:
     check_logged_in(page)
     await check_blocked(page)
     urls: list[str] = []
-    for _ in range(4):
+    for _ in range(min(30, max(4, limit // 5))):
         hrefs = await page.eval_on_selector_all(
             'a[href*="/p/"], a[href*="/reel/"]', "els => els.map(e => e.getAttribute('href'))"
         )

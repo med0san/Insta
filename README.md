@@ -124,7 +124,7 @@ Garde-fous contre les erreurs des modèles d'IA (surtout les petits modèles loc
 | **Republier / mettre en story** (défaut : ON) | Si la légende parle de story / republication (obligatoire ou bonus), le bot l'ajoute à votre story si Instagram web propose l'option, sinon clique sur le bouton **republication** (↻). |
 | **Participer quand même** (défaut : ON) | Une condition impossible (message privé, abonnement TikTok/Facebook…) ou un manque d'amis n'annule plus la participation : le bot fait tout le reste (follow, like, commentaire avec les amis disponibles…). |
 | **Vitesse** | *Humaine* (3-9 s entre actions, 45-120 s entre concours) ou *Rapide* (1,5-4 s / 10-25 s). |
-| **Quota journalier** | jusqu'à 500. |
+| **Quota journalier** | aucun plafond par défaut. |
 
 Les dates de fin et les annonces de gagnants sont jugées par des règles fixes (un petit modèle local se trompe
 souvent sur « le concours est-il encore actif ? »). Un concours réellement expiré reste donc ignoré, avec
@@ -132,6 +132,25 @@ l'extrait de légende qui le prouve.
 
 Gardé volontairement : l'**arrêt immédiat** si Instagram affiche « Action bloquée » / « Try Again Later ».
 Continuer après un blocage fait passer le compte en restriction, voire en suspension.
+
+## Mode autonome (toute la nuit)
+
+Le bot tourne en boucle sans surveillance :
+
+- **Aucun plafond** par défaut (réglage « Plafond journalier » : 0 = illimité ; une valeur > 0 met le bot en pause
+  jusqu'au lendemain une fois atteinte, sans l'arrêter).
+- **Les erreurs ne l'arrêtent pas** : un post cassé est noté « Erreur » et le suivant est traité ; si le navigateur
+  plante ou refuse de démarrer, il est relancé après une attente croissante. Chaque cycle utilise un Chromium neuf.
+  Arrêt seulement après 8 cycles consécutifs en échec.
+- **Pas de veille du PC** tant que le bot tourne (Windows, macOS).
+- **Après « Action bloquée » / « Try Again Later »** : pause (120 min par défaut, réglable) puis reprise automatique.
+  **Au 3<sup>e</sup> blocage en 24 h le bot s'arrête** pour ne pas aggraver la restriction du compte.
+- **Reprise après plantage ou redémarrage du serveur** : `run.bat` / `run.sh` relancent le serveur, qui relance le bot
+  s'il tournait. Le bouton « Arrêter le bot » désactive cette reprise.
+- Entre deux scans : 3-8 min si le dernier scan a trouvé du nouveau, 15-30 min sinon. Ajoutez des hashtags pour plus de volume.
+- Session Instagram expirée : le bot s'arrête (il ne peut pas se reconnecter seul si Instagram demande un code).
+
+Laissez la fenêtre `run.bat` ouverte et l'ordinateur branché sur secteur. Désactivez le Dry-Run pour participer pour de vrai.
 
 ## Passer en mode réel
 

@@ -165,12 +165,17 @@
               <div id="tagChips" class="mt-2.5 flex flex-wrap gap-1.5"></div>
             </div>
 
-            <div>
-              <div class="flex items-center justify-between">
-                <label class="label" for="quotaRange">Quota journalier max</label>
-                <input id="quotaNum" type="number" min="1" max="500" class="input !w-20 !py-1 text-right font-mono" />
+            <div class="rounded-[10px] border border-line bg-bg px-3.5 py-3 space-y-3">
+              <p class="text-sm font-medium text-white">Mode autonome <span class="text-xs font-normal text-mute">— tourne toute la nuit sans surveillance</span></p>
+              <div class="flex items-center justify-between gap-3">
+                <label class="text-xs text-mute" for="quotaNum">Plafond journalier <span class="text-neutral-500">(0 = aucun)</span></label>
+                <input id="quotaNum" type="number" min="0" class="input !w-24 !py-1 text-right font-mono" />
               </div>
-              <input id="quotaRange" type="range" min="1" max="50" class="mt-3 w-full" />
+              <div class="flex items-center justify-between gap-3">
+                <label class="text-xs text-mute" for="cooldownNum">Pause après un « Action bloquée » <span class="text-neutral-500">(min)</span></label>
+                <input id="cooldownNum" type="number" min="10" max="1440" class="input !w-24 !py-1 text-right font-mono" />
+              </div>
+              <p class="text-xs text-mute leading-relaxed">Les erreurs sont absorbées (navigateur relancé), le PC ne se met pas en veille et le bot reprend seul après un blocage ou un redémarrage du serveur. Il s'arrête au 3<sup>e</sup> blocage en 24 h.</p>
             </div>
 
             <div>
@@ -178,7 +183,7 @@
                 <label class="label" for="pphRange">Posts examinés / hashtag</label>
                 <span id="pphVal" class="font-mono text-sm text-neutral-300">12</span>
               </div>
-              <input id="pphRange" type="range" min="1" max="50" class="mt-3 w-full" />
+              <input id="pphRange" type="range" min="1" max="100" class="mt-3 w-full" />
             </div>
 
             <div class="space-y-3 rounded-[10px] border border-line bg-bg p-3.5">
@@ -383,7 +388,7 @@ async function api(path, opts = {}) {
 }
 
 // ---------------- Config ----------------
-let config = { friends_to_tag: [], hashtags: [], daily_quota: 10, dry_run: true, headless: true, posts_per_hashtag: 12 };
+let config = { friends_to_tag: [], hashtags: [], daily_quota: 0, dry_run: true, headless: true, posts_per_hashtag: 12 };
 let saveTimer = null;
 
 function scheduleSave(patch) {
@@ -392,9 +397,9 @@ function scheduleSave(patch) {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     try {
-      const { friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag, analyzer_mode, ollama_model, default_answer, api_base_url, api_model, do_story, force_participate, speed } = config;
+      const { friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag, analyzer_mode, ollama_model, default_answer, api_base_url, api_model, do_story, force_participate, speed, block_cooldown_min } = config;
       const api_key = config.api_key || undefined;
-      const saved = await api('/api/config', { method: 'PUT', body: JSON.stringify({ friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag, analyzer_mode, ollama_model, default_answer, api_base_url, api_model, api_key, do_story, force_participate, speed }) });
+      const saved = await api('/api/config', { method: 'PUT', body: JSON.stringify({ friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag, analyzer_mode, ollama_model, default_answer, api_base_url, api_model, api_key, do_story, force_participate, speed, block_cooldown_min }) });
       config = { ...config, ...saved }; delete config.api_key; if (api_key) $('#apiKey').value = '';
       renderConfig();
       $('#saveState').textContent = 'Enregistré ✓';
@@ -422,8 +427,8 @@ function setSwitch(el, v) { el.setAttribute('aria-checked', v ? 'true' : 'false'
 function renderConfig() {
   renderChips($('#friendChips'), config.friends_to_tag, '@', 'friends_to_tag');
   renderChips($('#tagChips'), config.hashtags, '#', 'hashtags');
-  $('#quotaRange').value = Math.min(config.daily_quota, 50);
-  if (document.activeElement !== $('#quotaNum')) $('#quotaNum').value = config.daily_quota;
+  if (document.activeElement !== $('#cooldownNum')) $('#cooldownNum').value = config.block_cooldown_min ?? 120;
+  if (document.activeElement !== $('#quotaNum')) $('#quotaNum').value = config.daily_quota ?? 0;
   $('#pphRange').value = config.posts_per_hashtag; $('#pphVal').textContent = config.posts_per_hashtag;
   setSwitch($('#dryRun'), config.dry_run);
   setSwitch($('#doStory'), config.do_story !== false);
@@ -458,8 +463,8 @@ $('#friendInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.
 $('#friendAdd').onclick = () => addItems($('#friendInput'), 'friends_to_tag', '@');
 $('#tagInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addItems(e.target, 'hashtags', '#'); } });
 $('#tagAdd').onclick = () => addItems($('#tagInput'), 'hashtags', '#');
-$('#quotaRange').oninput = e => { $('#quotaNum').value = e.target.value; scheduleSave({ daily_quota: +e.target.value }); };
-$('#quotaNum').onchange = e => { const v = Math.max(1, Math.min(500, +e.target.value || 1)); e.target.value = v; scheduleSave({ daily_quota: v }); renderConfig(); };
+$('#cooldownNum').onchange = e => { const v = Math.max(10, Math.min(1440, +e.target.value || 120)); e.target.value = v; scheduleSave({ block_cooldown_min: v }); };
+$('#quotaNum').onchange = e => { const v = Math.max(0, Math.floor(+e.target.value || 0)); e.target.value = v; scheduleSave({ daily_quota: v }); renderConfig(); };
 $('#pphRange').oninput = e => { $('#pphVal').textContent = e.target.value; scheduleSave({ posts_per_hashtag: +e.target.value }); };
 const API_PRESETS = {
   gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash', hint: 'Clé gratuite sans carte bancaire : <span class="text-neutral-300">aistudio.google.com/apikey</span>' },
@@ -578,9 +583,10 @@ async function refreshStatus() {
   $('#manualBtn').disabled = s.browser_busy;
   $('#loginBtn').disabled = running || s.browser_busy;
   $('#todayCount').textContent = s.today;
-  $('#quotaShow').textContent = s.quota;
+  $('#quotaShow').textContent = s.quota > 0 ? s.quota : '∞';
   $('#todayUnit').textContent = s.dry_run ? 'simulations' : 'participations';
-  $('#todayBar').style.width = Math.min(100, (s.today / Math.max(1, s.quota)) * 100) + '%';
+  $('#todayBar').style.width = s.quota > 0 ? Math.min(100, (s.today / s.quota) * 100) + '%' : '100%';
+  $('#todayBar').style.opacity = s.quota > 0 ? '1' : '.15';
   $('#todayReal').textContent = s.today_real;
   $('#todaySim').textContent = s.today_simulated;
   $('#browserState').textContent = s.browser_busy ? s.browser_owner : 'libre';
