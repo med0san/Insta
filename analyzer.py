@@ -116,10 +116,12 @@ OPTIONAL_RE = re.compile(
     r"peux|peut|pouvez|possibilite|optional|extra|can also|boost|pas besoin|inutile|no need|sans obligation)\b"
 )
 STORY_RE = re.compile(
-    r"(\b(?:stories|story|storie|repost\w*|republi\w*)\b|\ben (?:mp|dm)\b|message prive|\bdm (?:us|moi|nous)\b|"
+    r"(\b(?:stories|story|storie|repost\w*|republi\w*)\b|"
     r"\bpartag\w*\s+(?:cette|ce|cet|le|la|l')\s*(?:publication|post|reel|video|giveaway|concours)|"
     r"\bshare (?:this|the) (?:post|reel|giveaway))"
 )
+DM_RE = re.compile(r"(\ben (?:mp|dm)\b|message prive|\bdm (?:us|moi|nous)\b|\benvoie\w*[^.\n]{0,30}\b(?:mp|dm)\b)")
+NEGATION_RE = re.compile(r"\b(pas besoin|inutile|no need|pas obligatoire|non obligatoire|sans obligation)\b")
 OTHER_PLATFORM_RE = re.compile(
     r"\b(tiktok|youtube|facebook|twitter|snapchat|twitch|linkedin|pinterest|newsletter|telegram|discord|whatsapp)\b"
 )
@@ -267,28 +269,74 @@ def _choice_from_question(question: str) -> str | None:
     return None
 
 
-def _scan_conditions(caption: str, keyword: str | None) -> tuple[list[str], str | None]:
-    """Repère les conditions impossibles pour le bot et la question à laquelle répondre."""
+def _scan_conditions(caption: str, keyword: str | None) -> tuple[list[str], str | None, bool]:
+    """Conditions impossibles pour le bot, question à laquelle répondre, et story/republication demandée."""
     unsupported: list[str] = []
     question: str | None = None
+    needs_story = False
     for s in _split_sentences(caption):
         ns = _norm(s)
         optional = bool(OPTIONAL_RE.search(ns))
+        if STORY_RE.search(ns) and not NEGATION_RE.search(ns):
+            needs_story = True  # faisable : republication / story (obligatoire ou bonus)
         if not optional:
-            if STORY_RE.search(ns):
-                unsupported.append(f"partage en story / republication / message privé obligatoire (phrase : « {re.sub(chr(10), ' ', s)[:100]} »)")
+            if DM_RE.search(ns):
+                unsupported.append(f"envoi en message privé obligatoire (phrase : « {s[:100]} »)")
             else:
                 m = OTHER_PLATFORM_RE.search(ns)
                 if m and (FOLLOW_RE.search(ns) or JOIN_RE.search(ns)):
                     unsupported.append(f"abonnement obligatoire sur une autre plateforme ({m.group(1)}) (phrase : « {s[:100]} »)")
+        # « Team chat ou chien ? » : question à choix ; les slogans rhétoriques (« Envie de … ? ») sont ignorés
         is_question = bool(QUESTION_RE.search(ns)) or (
-            s.rstrip().endswith("?") and not re.search(r"participer|gagner|how to|comment faire|concours|giveaway", ns)
+            s.rstrip().endswith("?") and " ou " in ns and not re.search(r"participer|gagner|concours|giveaway", ns)
         )
         if question is None and is_question and not (keyword and keyword.lower() in s.lower()):
             clean = re.sub(r"\([^)]*\)", "", s)                 # retire les parenthèses « (1 commentaire = 1 chance) »
             clean = re.sub(r"^[^\w«\"“]+", "", clean)            # retire puces / emojis en début de phrase
             question = re.sub(r"\s+", " ", clean).strip()[:200]
-    return list(dict.fromkeys(unsupported)), question
+    return list(dict.fromkeys(unsupported)), question, needs_story
+
+
+def _conditions(result: dict[str, Any], norm: str) -> list[str]:
+    out = []
+    if result["accounts_to_follow"]:
+        out.append("suivre " + ", ".join("@" + a for a in result["accounts_to_follow"]))
+    if LIKE_RE.search(norm):
+        out.append("liker")
+    if result["needs_save"]:
+        out.append("enregistrer le post")
+    if result["needs_story"]:
+        out.append("republier / mettre en story")
+    if result["friends_count"]:
+        out.append(f"identifier {result['friends_count']} ami(s)")
+    if result["custom_keyword"]:
+        out.append(f"écrire « {result['custom_keyword']} »")
+    if result["question"]:
+        out.append(f"répondre à : {result['question']}")
+    for u in result["unsupported"]:
+        out.append(f"⚠ {u}")
+    return out
+
+
+def _activity(caption: str, post_date: str | None, details: list[str]) -> tuple[bool, str]:
+    """(terminé ?, raison) d'après les annonces de gagnants et les dates de fin — déterministe."""
+    norm = _norm(caption)
+    today = date.today()
+    posted = _parse_post_date(post_date)
+    if ENDED_RE.search(norm):
+        return True, "Concours terminé (annonce de gagnant ou de clôture)."
+    found = _find_end_date(norm, posted or today)
+    if found:
+        end, snippet = found
+        details.append(f"fin le {end.strftime('%d/%m/%Y')}")
+        if end < today:
+            return True, (
+                f"Concours expiré : fin le {end.strftime('%d/%m/%Y')} (déjà passée au {today.strftime('%d/%m/%Y')}), "
+                f"d'après l'extrait « …{snippet}… »."
+            )
+    elif posted and (today - posted).days > 45:
+        return True, f"Aucune date de fin et publication ancienne ({posted.isoformat()}) : considéré terminé."
+    return False, ""
 
 
 # ---------------------------------------------------------------------------
@@ -296,9 +344,6 @@ def _scan_conditions(caption: str, keyword: str | None) -> tuple[list[str], str 
 # ---------------------------------------------------------------------------
 def analyze_sync(caption: str, author: str | None = None, post_date: str | None = None) -> dict[str, Any]:
     norm = _norm(caption)
-    today = date.today()
-    posted = _parse_post_date(post_date)
-    ref = posted or today
 
     result: dict[str, Any] = {
         "is_giveaway": False,
@@ -308,12 +353,14 @@ def analyze_sync(caption: str, author: str | None = None, post_date: str | None 
         "custom_keyword": None,
         "needs_save": False,
         "needs_comment": False,
+        "needs_story": False,
         "question": None,
         "answer": None,
         "unsupported": [],
         "conditions": [],
         "reason": "",
         "_hard_inactive": False,
+        "_details": [],
     }
 
     strong = bool(STRONG_RE.search(norm))
@@ -333,58 +380,32 @@ def analyze_sync(caption: str, author: str | None = None, post_date: str | None 
     result["custom_keyword"] = _custom_keyword(caption)
     result["needs_save"] = bool(SAVE_RE.search(norm))
     result["needs_comment"] = bool(COMMENT_RE.search(norm)) or result["friends_count"] > 0
-    result["unsupported"], result["question"] = _scan_conditions(caption, result["custom_keyword"])
+    result["unsupported"], result["question"], result["needs_story"] = _scan_conditions(caption, result["custom_keyword"])
     if result["question"]:
         result["answer"] = _choice_from_question(result["question"])
+    result["conditions"] = _conditions(result, norm)
 
-    conditions = []
-    if result["accounts_to_follow"]:
-        conditions.append("suivre " + ", ".join("@" + a for a in result["accounts_to_follow"]))
-    if LIKE_RE.search(norm):
-        conditions.append("liker")
-    if result["needs_save"]:
-        conditions.append("enregistrer le post")
-    if result["friends_count"]:
-        conditions.append(f"identifier {result['friends_count']} ami(s)")
-    if result["custom_keyword"]:
-        conditions.append(f"écrire « {result['custom_keyword']} »")
-    if result["question"]:
-        conditions.append(f"répondre à : {result['question']}")
-    for u in result["unsupported"]:
-        conditions.append(f"⚠ {u}")
-    result["conditions"] = conditions
-
-    details = []
+    details = result["_details"]
     prize_txt = _prize(caption)
     if prize_txt:
         details.append(f"lot : {prize_txt}")
 
-    if ENDED_RE.search(norm):
-        result["reason"] = "Concours terminé (annonce de gagnant ou de clôture)."
+    ended, why = _activity(caption, post_date, details)
+    if ended:
         result["_hard_inactive"] = True
-        return result
-
-    found = _find_end_date(norm, ref)
-    if found:
-        end, snippet = found
-        details.append(f"fin le {end.strftime('%d/%m/%Y')}")
-        if end < today:
-            result["reason"] = (
-                f"Concours expiré : fin le {end.strftime('%d/%m/%Y')} (déjà passée au {today.strftime('%d/%m/%Y')}), "
-                f"d'après l'extrait « …{snippet}… »."
-            )
-            result["_hard_inactive"] = True
-            return result
-    elif posted and (today - posted).days > 45:
-        result["reason"] = f"Aucune date de fin et publication ancienne ({posted.isoformat()}) : considéré terminé."
-        result["_hard_inactive"] = True
+        result["reason"] = why
         return result
 
     result["is_active"] = True
-    result["reason"] = "Concours actif" + (" — " + ", ".join(details) if details else " (aucune date de fin indiquée)") + "."
-    if conditions:
-        result["reason"] += " À faire : " + " ; ".join(conditions) + "."
+    result["reason"] = _active_reason(details, result["conditions"])
     return result
+
+
+def _active_reason(details: list[str], conditions: list[str]) -> str:
+    reason = "Concours actif" + (" — " + ", ".join(details) if details else " (aucune date de fin indiquée)") + "."
+    if conditions:
+        reason += " À faire : " + " ; ".join(conditions) + "."
+    return reason
 
 
 # ---------------------------------------------------------------------------
@@ -399,13 +420,14 @@ LLM_SCHEMA: dict[str, Any] = {
         "friends_count": {"type": "integer"},
         "custom_keyword": {"type": "string"},
         "needs_save": {"type": "boolean"},
+        "needs_story": {"type": "boolean"},
         "question_answer": {"type": "string"},
         "unsupported_conditions": {"type": "array", "items": {"type": "string"}},
         "reason": {"type": "string"},
     },
     "required": [
         "is_giveaway", "is_active", "accounts_to_follow", "friends_count", "custom_keyword",
-        "needs_save", "question_answer", "unsupported_conditions", "reason",
+        "needs_save", "needs_story", "question_answer", "unsupported_conditions", "reason",
     ],
 }
 
@@ -418,8 +440,9 @@ Réponds uniquement avec l'objet JSON demandé.
 - friends_count : nombre d'amis à identifier en commentaire (0 si aucun).
 - custom_keyword : mot / phrase / emoji imposé en commentaire, sinon chaîne vide.
 - needs_save : vrai s'il faut enregistrer la publication.
-- question_answer : si la légende pose une question ou demande de dire quelque chose en commentaire (ex : « dis-moi quel cadeau te fait envie »), rédige une réponse courte, naturelle, enthousiaste, en français, à la première personne (en t'appuyant sur l'image : nom d'un des lots visibles). Sinon chaîne vide. N'inclus PAS les @ d'amis.
-- unsupported_conditions : conditions OBLIGATOIRES que seul un humain peut faire (partager en story, envoyer un message privé, s'abonner sur TikTok/YouTube/Facebook, acheter). Ne mets PAS les actions présentées comme bonus ou optionnelles.
+- needs_story : vrai s'il faut (ou on peut) republier / partager le post en story.
+- question_answer : si la légende pose une vraie question ou demande de dire quelque chose en commentaire (ex : « dis-moi quel cadeau te fait envie »), rédige une réponse courte, naturelle, enthousiaste, en français, à la première personne (en t'appuyant sur l'image : nom d'un des lots visibles). Une phrase d'accroche rhétorique (« Envie de gagner ? ») n'est PAS une question. Sinon chaîne vide. N'inclus PAS les @ d'amis.
+- unsupported_conditions : conditions OBLIGATOIRES impossibles à automatiser : envoyer un message privé, s'abonner sur TikTok/YouTube/Facebook, acheter. La story / republication est FAISABLE : ne la mets PAS ici.
 - reason : une phrase courte en français résumant ta décision."""
 
 
@@ -467,7 +490,7 @@ async def _llm_analyze(caption, author, post_date, image_b64, cfg) -> dict[str, 
     return json.loads(data["message"]["content"])
 
 
-def _merge(rules: dict[str, Any], llm: dict[str, Any], caption: str, author: str | None) -> dict[str, Any]:
+def _merge(rules: dict[str, Any], llm: dict[str, Any], caption: str, author: str | None, post_date: str | None = None) -> dict[str, Any]:
     low_caption = caption.lower()
     allowed = {author.lower()} if author else set()
     accounts = []
@@ -486,25 +509,41 @@ def _merge(rules: dict[str, Any], llm: dict[str, Any], caption: str, author: str
     llm_kw = (llm.get("custom_keyword") or "").strip()
     if llm_kw and (rules["question"] or "").lower().find(llm_kw.lower()) >= 0 and not rules["custom_keyword"]:
         llm_kw = ""  # le « mot-clé » n'est en fait qu'une option de la question (« noire ou rose »)
-    unsupported = list(dict.fromkeys(rules["unsupported"] + [str(u) for u in llm.get("unsupported_conditions") or [] if str(u).strip()]))
+    # la story / republication est faisable : on ne la garde pas parmi les conditions impossibles
+    unsupported = [
+        u for u in rules["unsupported"] + [str(x) for x in llm.get("unsupported_conditions") or []]
+        if u.strip() and not STORY_RE.search(_norm(u))
+    ]
+    unsupported = list(dict.fromkeys(unsupported))
+
+    is_giveaway = bool(llm.get("is_giveaway")) or rules["is_giveaway"]
+    details = list(rules["_details"])
+    if rules["is_giveaway"]:
+        hard, why = rules["_hard_inactive"], rules["reason"]
+    else:
+        hard, why = _activity(caption, post_date, details)
     out = dict(rules)
     out.update(
-        is_giveaway=bool(llm.get("is_giveaway")) or rules["is_giveaway"],
-        is_active=(bool(llm.get("is_active")) and not rules["_hard_inactive"]) if llm.get("is_giveaway") else rules["is_active"],
+        is_giveaway=is_giveaway,
+        # Dates de fin et annonces de gagnants : jugées par des règles déterministes. Un petit modèle local
+        # répond souvent is_active=false à tort, on ne lui laisse donc pas ce verdict.
+        is_active=is_giveaway and not hard,
+        _hard_inactive=hard,
         accounts_to_follow=accounts,
         friends_count=max(0, min(friends, 10)),
         custom_keyword=llm_kw or rules["custom_keyword"],
         needs_save=bool(llm.get("needs_save")) or rules["needs_save"],
+        needs_story=bool(llm.get("needs_story")) or rules["needs_story"],
+        needs_comment=rules["needs_comment"] or friends > 0 or bool(answer),
         answer=answer or rules["answer"],
         question=rules["question"] or (answer and "question détectée par le modèle"),
         unsupported=unsupported,
     )
-    if llm.get("reason"):
-        out["reason"] = str(llm["reason"]).strip().rstrip(". ")
-        if out["is_active"] and rules["conditions"]:
-            out["reason"] += ". À faire : " + " ; ".join(rules["conditions"]) + "."
-    if rules["_hard_inactive"]:
-        out["reason"] = rules["reason"]
+    out["conditions"] = _conditions(out, _norm(caption))
+    if hard:
+        out["reason"] = why
+    elif is_giveaway:
+        out["reason"] = _active_reason(details, out["conditions"])
     return out
 
 
@@ -514,7 +553,7 @@ def _merge(rules: dict[str, Any], llm: dict[str, Any], caption: str, author: str
 JSON_HINT = (
     "\n\nRéponds avec UN SEUL objet JSON ayant exactement ces clés : is_giveaway (bool), is_active (bool), "
     "accounts_to_follow (liste de chaînes), friends_count (entier), custom_keyword (chaîne, \"\" si aucun), "
-    "needs_save (bool), question_answer (chaîne, \"\" si aucune), unsupported_conditions (liste de chaînes), "
+    "needs_save (bool), needs_story (bool), question_answer (chaîne, \"\" si aucune), unsupported_conditions (liste de chaînes), "
     "reason (chaîne). Aucun texte hors du JSON."
 )
 API_MIN_INTERVAL = 4.5          # secondes entre deux appels (les offres gratuites limitent les requêtes/minute)
@@ -667,4 +706,4 @@ async def analyze_caption(
     except (urllib.error.URLError, OSError, KeyError, IndexError, ValueError, TimeoutError, AnalyzerError) as e:
         bus.log(f"{'API' if mode == 'api' else 'Ollama'} indisponible ({e}) : repli sur l'analyse par règles.", "warning")
         return rules
-    return _merge(rules, llm, caption, author)
+    return _merge(rules, llm, caption, author, post_date)

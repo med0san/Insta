@@ -168,7 +168,7 @@
             <div>
               <div class="flex items-center justify-between">
                 <label class="label" for="quotaRange">Quota journalier max</label>
-                <input id="quotaNum" type="number" min="1" max="200" class="input !w-20 !py-1 text-right font-mono" />
+                <input id="quotaNum" type="number" min="1" max="500" class="input !w-20 !py-1 text-right font-mono" />
               </div>
               <input id="quotaRange" type="range" min="1" max="50" class="mt-3 w-full" />
             </div>
@@ -218,6 +218,30 @@
                 <input id="defaultAnswer" class="input mt-1.5" placeholder="Le premier cadeau me fait trop envie 😍" />
                 <p class="mt-1.5 text-xs text-mute">Utilisée quand un concours demande « dis-moi quel cadeau… » et que le modèle local n'est pas actif.</p>
               </div>
+            </div>
+
+            <div class="flex items-center justify-between gap-4 rounded-[10px] border border-line bg-bg px-3.5 py-3">
+              <div>
+                <p class="text-sm font-medium text-white">Republier / mettre en story</p>
+                <p class="text-xs text-mute mt-0.5">Quand le concours le demande (obligatoire ou bonus). Story si Instagram web la propose, sinon bouton « republication ».</p>
+              </div>
+              <button id="doStory" class="switch" role="switch" aria-checked="true" aria-label="Story"></button>
+            </div>
+
+            <div class="flex items-center justify-between gap-4 rounded-[10px] border border-line bg-bg px-3.5 py-3">
+              <div>
+                <p class="text-sm font-medium text-white">Participer quand même</p>
+                <p class="text-xs text-mute mt-0.5">Ne rien ignorer : si une condition est impossible (message privé, autre réseau) ou s'il manque des amis, le bot fait tout le reste.</p>
+              </div>
+              <button id="forceParticipate" class="switch" role="switch" aria-checked="true" aria-label="Participer quand même"></button>
+            </div>
+
+            <div>
+              <label class="label" for="speed">Vitesse</label>
+              <select id="speed" class="input mt-1.5">
+                <option value="human">Humaine — 3-9 s entre actions, 45-120 s entre concours (plus sûr)</option>
+                <option value="fast">Rapide — 1,5-4 s entre actions, 10-25 s entre concours</option>
+              </select>
             </div>
 
             <div class="flex items-center justify-between gap-4 rounded-[10px] border border-line bg-bg px-3.5 py-3">
@@ -347,9 +371,9 @@ function scheduleSave(patch) {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     try {
-      const { friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag, analyzer_mode, ollama_model, default_answer, api_base_url, api_model } = config;
+      const { friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag, analyzer_mode, ollama_model, default_answer, api_base_url, api_model, do_story, force_participate, speed } = config;
       const api_key = config.api_key || undefined;
-      const saved = await api('/api/config', { method: 'PUT', body: JSON.stringify({ friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag, analyzer_mode, ollama_model, default_answer, api_base_url, api_model, api_key }) });
+      const saved = await api('/api/config', { method: 'PUT', body: JSON.stringify({ friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag, analyzer_mode, ollama_model, default_answer, api_base_url, api_model, api_key, do_story, force_participate, speed }) });
       config = { ...config, ...saved }; delete config.api_key; if (api_key) $('#apiKey').value = '';
       renderConfig();
       $('#saveState').textContent = 'Enregistré ✓';
@@ -381,6 +405,9 @@ function renderConfig() {
   if (document.activeElement !== $('#quotaNum')) $('#quotaNum').value = config.daily_quota;
   $('#pphRange').value = config.posts_per_hashtag; $('#pphVal').textContent = config.posts_per_hashtag;
   setSwitch($('#dryRun'), config.dry_run);
+  setSwitch($('#doStory'), config.do_story !== false);
+  setSwitch($('#forceParticipate'), config.force_participate !== false);
+  $('#speed').value = config.speed || 'human';
   $('#analyzerMode').value = config.analyzer_mode || 'rules';
   $('#ollamaBox').classList.toggle('hidden', config.analyzer_mode !== 'ollama');
   $('#apiBox').classList.toggle('hidden', config.analyzer_mode !== 'api');
@@ -411,7 +438,7 @@ $('#friendAdd').onclick = () => addItems($('#friendInput'), 'friends_to_tag', '@
 $('#tagInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addItems(e.target, 'hashtags', '#'); } });
 $('#tagAdd').onclick = () => addItems($('#tagInput'), 'hashtags', '#');
 $('#quotaRange').oninput = e => { $('#quotaNum').value = e.target.value; scheduleSave({ daily_quota: +e.target.value }); };
-$('#quotaNum').onchange = e => { const v = Math.max(1, Math.min(200, +e.target.value || 1)); e.target.value = v; scheduleSave({ daily_quota: v }); renderConfig(); };
+$('#quotaNum').onchange = e => { const v = Math.max(1, Math.min(500, +e.target.value || 1)); e.target.value = v; scheduleSave({ daily_quota: v }); renderConfig(); };
 $('#pphRange').oninput = e => { $('#pphVal').textContent = e.target.value; scheduleSave({ posts_per_hashtag: +e.target.value }); };
 const API_PRESETS = {
   gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.5-flash', hint: 'Clé gratuite sans carte bancaire : <span class="text-neutral-300">aistudio.google.com/apikey</span>' },
@@ -438,6 +465,9 @@ $('#ollamaTest').onclick = async () => {
   try { const r = await api('/api/analyzer/status'); hint.textContent = r.message; hint.className = 'text-xs ' + (r.ok ? 'text-green-400' : 'text-amber-300'); }
   catch (e) { hint.textContent = e.message; hint.className = 'text-xs text-red-400'; }
 };
+$('#doStory').onclick = () => { const v = config.do_story === false; setSwitch($('#doStory'), v); scheduleSave({ do_story: v }); };
+$('#forceParticipate').onclick = () => { const v = config.force_participate === false; setSwitch($('#forceParticipate'), v); scheduleSave({ force_participate: v }); };
+$('#speed').onchange = e => scheduleSave({ speed: e.target.value });
 $('#dryRun').onclick = () => {
   const next = !config.dry_run;
   if (!next && !confirm('Désactiver le Dry-Run ? Le bot likera, suivra et commentera réellement sur Instagram.')) return;

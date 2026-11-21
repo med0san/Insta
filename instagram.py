@@ -477,6 +477,64 @@ async def save_post(page: Page) -> str:
     return "enregistré"
 
 
+REPOST_SEL = 'svg[aria-label="Repost"], svg[aria-label="Republier"], svg[aria-label="Republication"]'
+SHARE_SEL = (
+    'svg[aria-label="Share"], svg[aria-label="Share Post"], svg[aria-label="Partager"], '
+    'svg[aria-label="Partager la publication"], svg[aria-label="Send"], svg[aria-label="Envoyer"]'
+)
+STORY_ITEM_RE = re.compile(
+    r"(Add (?:post |this post )?to (?:your )?story|Share to (?:your )?story|"
+    r"Ajouter (?:la publication |ce post )?à (?:votre|ta) story|Partager (?:dans|en) (?:votre|ta) story)",
+    re.I,
+)
+
+
+async def share_to_story(page: Page) -> str:
+    """Story si le menu de partage la propose, sinon republication (bouton ↻ d'Instagram web)."""
+    try:
+        share = page.locator(SHARE_SEL).first
+        await share.wait_for(state="visible", timeout=6000)
+        await share.click()
+        await asyncio.sleep(2)
+        item = page.get_by_text(STORY_ITEM_RE).first
+        if await item.is_visible(timeout=3000):
+            await item.click()
+            await asyncio.sleep(3)
+            confirm = page.get_by_role(
+                "button", name=re.compile(r"^(Share|Partager|Share to story|Your story|Votre story|Ta story)", re.I)
+            ).first
+            await confirm.click(timeout=8000)
+            await asyncio.sleep(4)
+            await check_blocked(page)
+            return "ajouté à votre story"
+    except InstagramBlocked:
+        raise
+    except Exception:
+        pass
+    try:
+        await page.keyboard.press("Escape")  # ferme le menu de partage resté ouvert
+    except Exception:
+        pass
+    await asyncio.sleep(1)
+
+    repost = page.locator(REPOST_SEL).first
+    try:
+        await repost.wait_for(state="visible", timeout=6000)
+    except PWTimeout:
+        raise RuntimeError("ni option « story » ni bouton de republication trouvés sur ce post")
+    await repost.click()
+    await asyncio.sleep(2)
+    try:
+        confirm = page.get_by_role("button", name=re.compile(r"^(Repost|Republier|Republication)$", re.I)).first
+        if await confirm.is_visible(timeout=3000):
+            await confirm.click()
+    except Exception:
+        pass
+    await asyncio.sleep(3)
+    await check_blocked(page)
+    return "republié (la story directe n'est pas proposée sur Instagram web)"
+
+
 async def follow_account(page: Page, account: str) -> str:
     await page.goto(f"{IG}/{account}/", wait_until="domcontentloaded")
     await human_delay(2.5, 5)

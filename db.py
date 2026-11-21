@@ -21,6 +21,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "analyzer_mode": "rules",  # "rules" (gratuit, hors ligne) ou "ollama" (modèle local gratuit)
     "ollama_model": "gemma3:4b",
     "ollama_url": "http://localhost:11434",
+    "do_story": True,          # republier / mettre en story quand le concours le demande
+    "force_participate": True, # participer même si une condition est impossible (participation partielle)
+    "speed": "human",          # "human" (3-9 s / 45-120 s) ou "fast" (1,5-4 s / 10-25 s)
     "api_base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
     "api_model": "gemini-2.5-flash",
     "api_key": "",             # clé gratuite (stockée localement en clair), vide pour les services sans clé

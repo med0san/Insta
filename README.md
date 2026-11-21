@@ -102,6 +102,22 @@ La clé est stockée en clair dans `giveaways.db` (local) et n'est jamais renvoy
 
 Dans les deux modes IA, les pseudos inventés par le modèle sont filtrés (seuls ceux présents dans la légende sont gardés).
 
+## Réglages « ne rien ignorer »
+
+| Réglage | Effet |
+|---|---|
+| **Republier / mettre en story** (défaut : ON) | Si la légende parle de story / republication (obligatoire ou bonus), le bot l'ajoute à votre story si Instagram web propose l'option, sinon clique sur le bouton **republication** (↻). |
+| **Participer quand même** (défaut : ON) | Une condition impossible (message privé, abonnement TikTok/Facebook…) ou un manque d'amis n'annule plus la participation : le bot fait tout le reste (follow, like, commentaire avec les amis disponibles…). |
+| **Vitesse** | *Humaine* (3-9 s entre actions, 45-120 s entre concours) ou *Rapide* (1,5-4 s / 10-25 s). |
+| **Quota journalier** | jusqu'à 500. |
+
+Les dates de fin et les annonces de gagnants sont jugées par des règles fixes (un petit modèle local se trompe
+souvent sur « le concours est-il encore actif ? »). Un concours réellement expiré reste donc ignoré, avec
+l'extrait de légende qui le prouve.
+
+Gardé volontairement : l'**arrêt immédiat** si Instagram affiche « Action bloquée » / « Try Again Later ».
+Continuer après un blocage fait passer le compte en restriction, voire en suspension.
+
 ## Passer en mode réel
 
 Le **Dry-Run** est activé par défaut. Désactivez-le avec l'interrupteur (une confirmation est demandée) pour
@@ -109,6 +125,7 @@ que le bot like, enregistre, suive et commente réellement. Commencez avec un qu
 
 ## Limites
 
-Les règles reconnaissent les formulations courantes mais peuvent rater une tournure inhabituelle ; en cas de
-doute le concours est ignoré plutôt que traité à tort. Les sélecteurs Instagram peuvent changer.
-Les règles se trouvent dans `analyzer.py`.
+Les règles reconnaissent les formulations courantes mais peuvent rater une tournure inhabituelle.
+Les sélecteurs Instagram peuvent changer. Instagram web ne propose pas toujours « Ajouter à ma story » :
+dans ce cas le bot republie le post à la place. Les envois en message privé et les abonnements hors Instagram
+ne sont pas automatisés. Les règles se trouvent dans `analyzer.py`.

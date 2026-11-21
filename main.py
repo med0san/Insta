@@ -43,10 +43,13 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 class ConfigIn(BaseModel):
     friends_to_tag: list[str] | None = None
     hashtags: list[str] | None = None
-    daily_quota: int | None = Field(default=None, ge=1, le=200)
+    daily_quota: int | None = Field(default=None, ge=1, le=500)
     dry_run: bool | None = None
     headless: bool | None = None
     posts_per_hashtag: int | None = Field(default=None, ge=1, le=50)
+    do_story: bool | None = None
+    force_participate: bool | None = None
+    speed: Literal["human", "fast"] | None = None
     analyzer_mode: Literal["rules", "ollama", "api"] | None = None
     api_base_url: str | None = Field(default=None, max_length=300)
     api_model: str | None = Field(default=None, max_length=120)

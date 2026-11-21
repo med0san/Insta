@@ -14,6 +14,8 @@ from logbus import bus
 ACTION_DELAY = (3.0, 9.0)        # entre deux actions
 GIVEAWAY_DELAY = (45.0, 120.0)   # entre deux concours
 CYCLE_PAUSE = (900.0, 1800.0)    # après avoir parcouru tous les hashtags
+FAST_ACTION = (1.5, 4.0)          # préréglage « rapide »
+FAST_GIVEAWAY = (10.0, 25.0)
 GENERIC_COMMENT = "Je participe ! 🍀"  # si le concours exige un commentaire sans autre précision
 
 
@@ -71,6 +73,13 @@ class Bot:
         except asyncio.TimeoutError:
             return
         raise StopBot()
+
+    @staticmethod
+    def _pace(cfg: dict[str, Any]) -> tuple[tuple[float, float], tuple[float, float]]:
+        """(délai entre actions, délai entre concours) selon le préréglage de vitesse."""
+        if cfg.get("speed") == "fast":
+            return FAST_ACTION, FAST_GIVEAWAY
+        return ACTION_DELAY, GIVEAWAY_DELAY
 
     def _check_stop(self) -> None:
         if self.stop_event.is_set():
@@ -152,10 +161,10 @@ class Bot:
                     raise StopBot()
                 participated = await self._process_post(page, url, tag, cfg)
                 if participated:
-                    await self._sleep(*GIVEAWAY_DELAY, label="Délai anti-détection entre concours")
+                    await self._sleep(*self._pace(cfg)[1], label="Délai anti-détection entre concours")
                 else:
-                    await self._sleep(*ACTION_DELAY)
-            await self._sleep(*ACTION_DELAY)
+                    await self._sleep(*self._pace(cfg)[0])
+            await self._sleep(*self._pace(cfg)[0])
 
     async def _process_post(self, page, url: str, tag: str, cfg: dict[str, Any]) -> bool:
         self._set_activity(f"Lecture {url}")
@@ -203,33 +212,44 @@ class Bot:
 
         if result.get("unsupported"):
             reason = "Condition(s) impossible(s) pour le bot : " + " ; ".join(result["unsupported"]) + "."
-            await db.add_history(url, author, tag, "Ignoré", reason)
-            bus.log(f"Décision : ignoré — {reason}", "warning")
-            bus.notify("history")
-            return False
+            if cfg.get("force_participate", True):
+                bus.log(f"⚠ {reason} Participation partielle quand même (option activée).", "warning")
+            else:
+                await db.add_history(url, author, tag, "Ignoré", reason)
+                bus.log(f"Décision : ignoré — {reason}", "warning")
+                bus.notify("history")
+                return False
 
         friends_pool = [f.strip().lstrip("@") for f in cfg["friends_to_tag"] if f.strip()]
         needed = result["friends_count"]
         if needed > len(friends_pool):
-            reason = (
-                f"{needed} ami(s) à identifier requis mais seulement {len(friends_pool)} configuré(s). "
-                + result["reason"]
-            )
-            await db.add_history(url, author, tag, "Ignoré", reason)
-            bus.log(f"Décision : ignoré, pas assez d'amis configurés ({needed} requis).", "warning")
-            bus.notify("history")
-            return False
+            if cfg.get("force_participate", True):
+                bus.log(
+                    f"⚠ {needed} ami(s) requis mais {len(friends_pool)} configuré(s) : on identifie tous ceux dont on dispose.",
+                    "warning",
+                )
+                needed = len(friends_pool)
+            else:
+                reason = (
+                    f"{needed} ami(s) à identifier requis mais seulement {len(friends_pool)} configuré(s). "
+                    + result["reason"]
+                )
+                await db.add_history(url, author, tag, "Ignoré", reason)
+                bus.log(f"Décision : ignoré, pas assez d'amis configurés ({needed} requis).", "warning")
+                bus.notify("history")
+                return False
 
         answer = result.get("answer")
         if result.get("question") and not answer:
             answer = (cfg.get("default_answer") or "").strip() or None
-            if not answer:
+            if not answer and not cfg.get("force_participate", True):
                 reason = "Une question demande une réponse personnalisée et aucune réponse par défaut n'est configurée."
                 await db.add_history(url, author, tag, "Ignoré", reason)
                 bus.log(f"Décision : ignoré — {reason}", "warning")
                 bus.notify("history")
                 return False
-            bus.log(f"Question détectée, réponse par défaut utilisée : « {answer} »", "debug")
+            if answer:
+                bus.log(f"Question détectée, réponse par défaut utilisée : « {answer} »", "debug")
 
         tagged = random.sample(friends_pool, needed) if needed else []
         parts = [p for p in (result["custom_keyword"], answer) if p] + [f"@{f}" for f in tagged]
@@ -238,6 +258,7 @@ class Bot:
         comment = " ".join(parts) if parts else None
         follows = result["accounts_to_follow"]
         save = bool(result.get("needs_save"))
+        story = bool(result.get("needs_story")) and bool(cfg.get("do_story", True))
 
         if cfg["dry_run"]:
             bus.log(f"🧪 [DRY-RUN] Aurait liké : {url}", "action")
@@ -247,6 +268,8 @@ class Bot:
                 bus.log(f"🧪 [DRY-RUN] Aurait suivi : @{acc}", "action")
             if comment:
                 bus.log(f"🧪 [DRY-RUN] Aurait commenté : « {comment} »", "action")
+            if story:
+                bus.log("🧪 [DRY-RUN] Aurait republié / mis en story", "action")
             await db.add_history(url, author, tag, "Simulé", result["reason"], comment)
             bus.notify("history")
             bus.notify("status")
@@ -257,19 +280,31 @@ class Bot:
         try:
             r = await ig.like_post(page)
             bus.log(f"❤️ Post {r} : {url}", "action")
-            await self._sleep(*ACTION_DELAY)
+            await self._sleep(*self._pace(cfg)[0])
             if save:
                 r = await ig.save_post(page)
                 bus.log(f"🔖 Post {r}", "action")
-                await self._sleep(*ACTION_DELAY)
+                await self._sleep(*self._pace(cfg)[0])
             for acc in follows:
                 self._check_stop()
                 r = await ig.follow_account(page, acc)
                 bus.log(f"➕ @{acc} : {r}", "action")
-                await self._sleep(*ACTION_DELAY)
+                await self._sleep(*self._pace(cfg)[0])
             if comment:
                 await ig.post_comment(page, url, comment)
                 bus.log(f"💬 Commentaire publié : « {comment} »", "action")
+                await self._sleep(*self._pace(cfg)[0])
+            if story:
+                try:
+                    if page.url.rstrip("/") != url.rstrip("/"):
+                        await page.goto(url, wait_until="domcontentloaded")
+                        await ig.human_delay(2, 4)
+                    r = await ig.share_to_story(page)
+                    bus.log(f"📲 Story / republication : {r}", "action")
+                except (ig.InstagramBlocked, ig.SessionExpired, StopBot):
+                    raise
+                except Exception as e:
+                    bus.log(f"Story / republication impossible : {e} (participation conservée).", "warning")
         except (ig.InstagramBlocked, ig.SessionExpired):
             await db.add_history(url, author, tag, "Erreur", "Action bloquée par Instagram.", comment)
             bus.notify("history")
