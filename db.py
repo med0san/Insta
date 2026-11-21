@@ -21,6 +21,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "analyzer_mode": "rules",  # "rules" (gratuit, hors ligne) ou "ollama" (modèle local gratuit)
     "ollama_model": "gemma3:4b",
     "ollama_url": "http://localhost:11434",
+    "api_base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "api_model": "gemini-flash-latest",
+    "api_key": "",             # clé gratuite (stockée localement en clair), vide pour les services sans clé
     "default_answer": "Le premier cadeau me fait trop envie 😍",  # réponse aux questions posées en commentaire
     "ig_username": "",
     "ig_password": "",         # stocké en clair, uniquement si l'utilisateur coche "Mémoriser"

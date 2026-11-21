@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 import db
 import instagram as ig
 from auth import auth
-from analyzer import ollama_status
+from analyzer import api_status, ollama_status
 from bot import bot
 from logbus import bus
 
@@ -47,7 +47,10 @@ class ConfigIn(BaseModel):
     dry_run: bool | None = None
     headless: bool | None = None
     posts_per_hashtag: int | None = Field(default=None, ge=1, le=50)
-    analyzer_mode: Literal["rules", "ollama"] | None = None
+    analyzer_mode: Literal["rules", "ollama", "api"] | None = None
+    api_base_url: str | None = Field(default=None, max_length=300)
+    api_model: str | None = Field(default=None, max_length=120)
+    api_key: str | None = Field(default=None, max_length=300)
     ollama_model: str | None = Field(default=None, max_length=100)
     ollama_url: str | None = Field(default=None, max_length=200)
     default_answer: str | None = Field(default=None, max_length=200)
@@ -75,6 +78,7 @@ def _clean_handles(values: list[str], prefix: str) -> list[str]:
 def _public_config(cfg: dict[str, Any]) -> dict[str, Any]:
     cfg = dict(cfg)
     cfg["has_saved_password"] = bool(cfg.pop("ig_password", ""))
+    cfg["has_api_key"] = bool(cfg.pop("api_key", ""))
     return cfg
 
 
@@ -123,9 +127,11 @@ async def put_config(body: ConfigIn):
 @app.get("/api/analyzer/status")
 async def analyzer_status():
     cfg = await db.get_config()
-    if cfg["analyzer_mode"] != "ollama":
-        return {"ok": True, "message": "Analyse par règles (gratuite, hors ligne)."}
-    return await asyncio.to_thread(ollama_status, cfg["ollama_url"], cfg["ollama_model"])
+    if cfg["analyzer_mode"] == "api":
+        return await api_status(cfg)
+    if cfg["analyzer_mode"] == "ollama":
+        return await asyncio.to_thread(ollama_status, cfg["ollama_url"], cfg["ollama_model"])
+    return {"ok": True, "message": "Analyse par règles (gratuite, hors ligne)."}
 
 
 @app.post("/api/session/check")

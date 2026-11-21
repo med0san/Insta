@@ -179,9 +179,9 @@ class Bot:
         self._set_activity(f"Analyse @{author or '?'}")
         bus.log(f"🔍 Lecture des conditions du post de @{author or '?'} ({url})…", "ai")
         image_b64 = None
-        if cfg.get("analyzer_mode") == "ollama":
+        if cfg.get("analyzer_mode") in ("ollama", "api"):
             image_b64 = await ig.fetch_image_b64(page, post.get("image_url"))
-            bus.log("Image du post analysée par le modèle local." if image_b64 else "Image indisponible : légende seule.", "debug")
+            bus.log("Image du post envoyée au modèle." if image_b64 else "Image indisponible : légende seule.", "debug")
         try:
             result = await analyze_caption(post["caption"], author, post["post_date"], image_b64, cfg)
         except AnalyzerError as e:

@@ -74,16 +74,33 @@ Pour chaque post, le bot lit **toute la légende** et en déduit la liste exacte
 - conditions **impossibles pour le bot** (partage en story obligatoire, message privé, abonnement TikTok/YouTube,
   achat) → concours ignoré avec la raison. Les actions présentées comme *bonus* sont ignorées sans bloquer.
 
-Deux modes (réglage « Lecture des conditions ») :
+Trois modes (réglage « Lecture des conditions ») :
 
 | Mode | Coût | Plus |
 |---|---|---|
 | **Règles intégrées** (défaut) | gratuit, hors ligne | rapide ; les questions reçoivent la *réponse par défaut* configurée |
-| **Ollama** (optionnel) | gratuit, local | un modèle lit aussi l'**image** du post (noms des lots…) et rédige une réponse adaptée |
+| **API IA gratuite** (recommandé) | gratuit, rien à installer | une IA lit la légende **et l'image**, comprend les conditions et rédige la réponse aux questions |
+| **Ollama** | gratuit, local | comme l'API, mais sur votre PC (modèle à télécharger) |
 
-Activer Ollama : installez [Ollama](https://ollama.com), lancez `ollama pull gemma3:4b`, choisissez
-« Modèle local Ollama » dans l'interface et cliquez **Tester**. Si Ollama est éteint, le bot retombe
-automatiquement sur les règles. Les pseudos inventés par le modèle sont filtrés (seuls ceux présents dans la légende sont gardés).
+**API IA gratuite** — n'importe quel service compatible OpenAI. Préréglages dans l'interface :
+
+| Service | Clé | Image | Remarque |
+|---|---|---|---|
+| **Google Gemini** | gratuite, sans carte : [aistudio.google.com/apikey](https://aistudio.google.com/apikey) | oui | meilleur choix |
+| Groq | gratuite : [console.groq.com/keys](https://console.groq.com/keys) | non (texte) | très rapide |
+| OpenRouter | gratuite : [openrouter.ai/keys](https://openrouter.ai/keys) | oui (modèles `:free`) | |
+| Pollinations | **aucune** | non | service public, qualité et disponibilité variables |
+
+Collez la clé, cliquez **Tester**. Les noms de modèles gratuits changent : modifiez le champ « modèle » si besoin.
+Les offres gratuites limitent les requêtes par minute : le bot espace les appels (≥ 4,5 s), réessaie une fois sur
+une limite (429) et **retombe sur les règles** si le service est en panne ou refuse. Seules la légende, le
+pseudo de l'auteur et l'image du post (publics) sont envoyés — jamais vos identifiants ni vos amis.
+La clé est stockée en clair dans `giveaways.db` (local) et n'est jamais renvoyée par l'API du serveur.
+
+**Ollama** : installez [Ollama](https://ollama.com), lancez `ollama pull gemma3:4b`, choisissez
+« Modèle local Ollama » et cliquez **Tester**.
+
+Dans les deux modes IA, les pseudos inventés par le modèle sont filtrés (seuls ceux présents dans la légende sont gardés).
 
 ## Passer en mode réel
 

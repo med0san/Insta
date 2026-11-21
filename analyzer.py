@@ -477,6 +477,9 @@ def _merge(rules: dict[str, Any], llm: dict[str, Any], caption: str, author: str
     except (TypeError, ValueError):
         friends = rules["friends_count"]
     answer = (llm.get("question_answer") or "").strip() or None
+    llm_kw = (llm.get("custom_keyword") or "").strip()
+    if llm_kw and (rules["question"] or "").lower().find(llm_kw.lower()) >= 0 and not rules["custom_keyword"]:
+        llm_kw = ""  # le « mot-clé » n'est en fait qu'une option de la question (« noire ou rose »)
     unsupported = list(dict.fromkeys(rules["unsupported"] + [str(u) for u in llm.get("unsupported_conditions") or [] if str(u).strip()]))
     out = dict(rules)
     out.update(
@@ -484,19 +487,143 @@ def _merge(rules: dict[str, Any], llm: dict[str, Any], caption: str, author: str
         is_active=(bool(llm.get("is_active")) and not rules["_hard_inactive"]) if llm.get("is_giveaway") else rules["is_active"],
         accounts_to_follow=accounts,
         friends_count=max(0, min(friends, 10)),
-        custom_keyword=(llm.get("custom_keyword") or "").strip() or rules["custom_keyword"],
+        custom_keyword=llm_kw or rules["custom_keyword"],
         needs_save=bool(llm.get("needs_save")) or rules["needs_save"],
         answer=answer or rules["answer"],
         question=rules["question"] or (answer and "question détectée par le modèle"),
         unsupported=unsupported,
     )
     if llm.get("reason"):
-        out["reason"] = str(llm["reason"]).strip()
+        out["reason"] = str(llm["reason"]).strip().rstrip(". ")
         if out["is_active"] and rules["conditions"]:
-            out["reason"] += " À faire : " + " ; ".join(rules["conditions"]) + "."
+            out["reason"] += ". À faire : " + " ; ".join(rules["conditions"]) + "."
     if rules["_hard_inactive"]:
         out["reason"] = rules["reason"]
     return out
+
+
+# ---------------------------------------------------------------------------
+# Mode optionnel : API gratuite compatible OpenAI (Gemini, Groq, OpenRouter, Pollinations…)
+# ---------------------------------------------------------------------------
+JSON_HINT = (
+    "\n\nRéponds avec UN SEUL objet JSON ayant exactement ces clés : is_giveaway (bool), is_active (bool), "
+    "accounts_to_follow (liste de chaînes), friends_count (entier), custom_keyword (chaîne, \"\" si aucun), "
+    "needs_save (bool), question_answer (chaîne, \"\" si aucune), unsupported_conditions (liste de chaînes), "
+    "reason (chaîne). Aucun texte hors du JSON."
+)
+API_MIN_INTERVAL = 4.5          # secondes entre deux appels (les offres gratuites limitent les requêtes/minute)
+_api_lock = asyncio.Lock()
+_api_last = 0.0
+
+
+def _extract_json(text: str) -> dict[str, Any]:
+    text = re.sub(r"^```(?:json)?|```$", "", text.strip(), flags=re.M).strip()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        m = re.search(r"\{.*\}", text, re.S)
+        if not m:
+            raise ValueError(f"réponse sans JSON : {text[:120]!r}")
+        return json.loads(m.group(0))
+
+
+def _api_chat(base_url: str, api_key: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
+    headers = {"Content-Type": "application/json", "User-Agent": "GiveawayBot/1.0"}
+    if api_key:
+        headers["Authorization"] = "Bearer " + api_key
+    req = urllib.request.Request(
+        base_url.rstrip("/") + "/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _http_detail(e: urllib.error.HTTPError) -> str:
+    try:
+        body = e.read().decode("utf-8", "replace")[:200].replace("\n", " ")
+    except Exception:  # noqa: BLE001
+        body = ""
+    return f"HTTP {e.code} {body}".strip()
+
+
+async def _api_request(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Appel avec limitation de débit, 1 nouvel essai sur 429, et repli sans image/JSON-mode sur 400."""
+    global _api_last
+    base, key = cfg.get("api_base_url") or "", cfg.get("api_key") or ""
+    async with _api_lock:
+        wait = API_MIN_INTERVAL - (asyncio.get_running_loop().time() - _api_last)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        try:
+            for attempt in range(3):
+                try:
+                    return await asyncio.to_thread(_api_chat, base, key, payload, 90)
+                except urllib.error.HTTPError as e:
+                    if e.code == 429 and attempt == 0:
+                        delay = min(float(e.headers.get("Retry-After") or 15), 30)
+                        bus.log(f"API : limite atteinte (429), nouvel essai dans {delay:.0f}s.", "warning")
+                        await asyncio.sleep(delay)
+                        continue
+                    if e.code == 400 and attempt <= 1:
+                        # le modèle refuse peut-être l'image ou response_format : on simplifie
+                        payload = json.loads(json.dumps(payload))
+                        payload.pop("response_format", None)
+                        for m in payload["messages"]:
+                            if isinstance(m.get("content"), list):
+                                m["content"] = "\n".join(c.get("text", "") for c in m["content"] if c.get("type") == "text")
+                        bus.log("API : requête refusée (400), nouvel essai sans image ni mode JSON.", "debug")
+                        continue
+                    raise
+            raise AnalyzerError("API : échec après plusieurs essais.")
+        finally:
+            _api_last = asyncio.get_running_loop().time()
+
+
+async def _api_analyze(caption, author, post_date, image_b64, cfg) -> dict[str, Any]:
+    text = (
+        f"Date du jour : {date.today().isoformat()}\n"
+        f"Compte auteur : {('@' + author) if author else 'inconnu'}\n"
+        f"Date de publication : {post_date or 'inconnue'}\n\nLégende :\n\"\"\"\n{caption[:4000]}\n\"\"\""
+    )
+    content: Any = text
+    if image_b64:
+        content = [
+            {"type": "text", "text": text},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + image_b64}},
+        ]
+    payload = {
+        "model": cfg.get("api_model") or "gemini-flash-latest",
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {"role": "system", "content": LLM_SYSTEM + JSON_HINT},
+            {"role": "user", "content": content},
+        ],
+    }
+    data = await _api_request(cfg, payload)
+    return _extract_json(data["choices"][0]["message"]["content"])
+
+
+async def api_status(cfg: dict[str, Any]) -> dict[str, Any]:
+    if not cfg.get("api_base_url"):
+        return {"ok": False, "message": "Adresse de l'API manquante."}
+    payload = {
+        "model": cfg.get("api_model") or "",
+        "max_tokens": 8,
+        "messages": [{"role": "user", "content": "Réponds juste : OK"}],
+    }
+    try:
+        data = await _api_request(cfg, payload)
+        reply = str(data["choices"][0]["message"]["content"]).strip()[:40]
+        return {"ok": True, "message": f"API opérationnelle (réponse : « {reply} »)."}
+    except urllib.error.HTTPError as e:
+        hint = " Clé API refusée ou manquante." if e.code in (401, 403) else ""
+        return {"ok": False, "message": f"{_http_detail(e)}.{hint}"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": f"API injoignable : {e}"}
 
 
 # ---------------------------------------------------------------------------
@@ -511,11 +638,18 @@ async def analyze_caption(
 ) -> dict[str, Any]:
     rules = analyze_sync(caption, author, post_date)
     cfg = cfg or {}
-    if cfg.get("analyzer_mode") != "ollama":
+    mode = cfg.get("analyzer_mode")
+    if mode not in ("ollama", "api"):
         return rules
     try:
-        llm = await _llm_analyze(caption, author, post_date, image_b64, cfg)
-    except (urllib.error.URLError, OSError, KeyError, ValueError, TimeoutError) as e:
-        bus.log(f"Ollama indisponible ({e}) : repli sur l'analyse par règles.", "warning")
+        if mode == "ollama":
+            llm = await _llm_analyze(caption, author, post_date, image_b64, cfg)
+        else:
+            llm = await _api_analyze(caption, author, post_date, image_b64, cfg)
+    except urllib.error.HTTPError as e:
+        bus.log(f"{'API' if mode == 'api' else 'Ollama'} en erreur ({_http_detail(e)}) : repli sur l'analyse par règles.", "warning")
+        return rules
+    except (urllib.error.URLError, OSError, KeyError, IndexError, ValueError, TimeoutError, AnalyzerError) as e:
+        bus.log(f"{'API' if mode == 'api' else 'Ollama'} indisponible ({e}) : repli sur l'analyse par règles.", "warning")
         return rules
     return _merge(rules, llm, caption, author)

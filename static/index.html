@@ -186,6 +186,7 @@
                 <label class="label" for="analyzerMode">Lecture des conditions</label>
                 <select id="analyzerMode" class="input mt-1.5">
                   <option value="rules">Règles intégrées (gratuit, hors ligne)</option>
+                  <option value="api">API IA gratuite (Gemini, Groq, sans clé…) — recommandé</option>
                   <option value="ollama">Modèle local Ollama (gratuit, lit aussi l'image)</option>
                 </select>
               </div>
@@ -195,6 +196,22 @@
                   <button id="ollamaTest" class="btn btn-ghost">Tester</button>
                 </div>
                 <p id="ollamaHint" class="text-xs text-mute">Installez Ollama (ollama.com) puis : <code class="font-mono text-neutral-300">ollama pull gemma3:4b</code></p>
+              </div>
+              <div id="apiBox" class="hidden space-y-2">
+                <select id="apiPreset" class="input">
+                  <option value="gemini">Google Gemini — clé gratuite, lit les images (meilleur choix)</option>
+                  <option value="groq">Groq — clé gratuite, très rapide</option>
+                  <option value="openrouter">OpenRouter — clé gratuite, modèles « :free »</option>
+                  <option value="pollinations">Pollinations — AUCUNE clé (qualité/disponibilité variables)</option>
+                  <option value="custom">Autre (compatible OpenAI)</option>
+                </select>
+                <input id="apiBase" class="input font-mono text-xs" placeholder="https://…/v1" />
+                <div class="flex gap-2">
+                  <input id="apiModel" class="input font-mono" placeholder="modèle" />
+                  <button id="apiTest" class="btn btn-ghost">Tester</button>
+                </div>
+                <input id="apiKey" type="password" class="input font-mono" placeholder="Clé API (laisser vide si le service n'en demande pas)" autocomplete="off" />
+                <p id="apiHint" class="text-xs text-mute"></p>
               </div>
               <div>
                 <label class="label" for="defaultAnswer">Réponse par défaut aux questions en commentaire</label>
@@ -330,9 +347,10 @@ function scheduleSave(patch) {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     try {
-      const { friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag, analyzer_mode, ollama_model, default_answer } = config;
-      const saved = await api('/api/config', { method: 'PUT', body: JSON.stringify({ friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag, analyzer_mode, ollama_model, default_answer }) });
-      config = { ...config, ...saved };
+      const { friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag, analyzer_mode, ollama_model, default_answer, api_base_url, api_model } = config;
+      const api_key = config.api_key || undefined;
+      const saved = await api('/api/config', { method: 'PUT', body: JSON.stringify({ friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag, analyzer_mode, ollama_model, default_answer, api_base_url, api_model, api_key }) });
+      config = { ...config, ...saved }; delete config.api_key; if (api_key) $('#apiKey').value = '';
       renderConfig();
       $('#saveState').textContent = 'Enregistré ✓';
       refreshStatus();
@@ -365,6 +383,11 @@ function renderConfig() {
   setSwitch($('#dryRun'), config.dry_run);
   $('#analyzerMode').value = config.analyzer_mode || 'rules';
   $('#ollamaBox').classList.toggle('hidden', config.analyzer_mode !== 'ollama');
+  $('#apiBox').classList.toggle('hidden', config.analyzer_mode !== 'api');
+  if (document.activeElement !== $('#apiBase')) $('#apiBase').value = config.api_base_url || '';
+  if (document.activeElement !== $('#apiModel')) $('#apiModel').value = config.api_model || '';
+  $('#apiKey').placeholder = config.has_api_key ? 'Clé enregistrée ✓ (saisir pour la remplacer)' : "Clé API (laisser vide si le service n'en demande pas)";
+  { const p = Object.entries(API_PRESETS).find(([, v]) => v.base === config.api_base_url); $('#apiPreset').value = p ? p[0] : 'custom'; if (p) $('#apiHint').innerHTML = p[1].hint; }
   if (document.activeElement !== $('#ollamaModel')) $('#ollamaModel').value = config.ollama_model || '';
   if (document.activeElement !== $('#defaultAnswer')) $('#defaultAnswer').value = config.default_answer || '';
   setSwitch($('#headless'), config.headless);
@@ -390,6 +413,22 @@ $('#tagAdd').onclick = () => addItems($('#tagInput'), 'hashtags', '#');
 $('#quotaRange').oninput = e => { $('#quotaNum').value = e.target.value; scheduleSave({ daily_quota: +e.target.value }); };
 $('#quotaNum').onchange = e => { const v = Math.max(1, Math.min(200, +e.target.value || 1)); e.target.value = v; scheduleSave({ daily_quota: v }); renderConfig(); };
 $('#pphRange').oninput = e => { $('#pphVal').textContent = e.target.value; scheduleSave({ posts_per_hashtag: +e.target.value }); };
+const API_PRESETS = {
+  gemini: { base: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-flash-latest', hint: 'Clé gratuite sans carte bancaire : <span class="text-neutral-300">aistudio.google.com/apikey</span>' },
+  groq: { base: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile', hint: 'Clé gratuite : <span class="text-neutral-300">console.groq.com/keys</span> (texte seul : ne lit pas l\'image)' },
+  openrouter: { base: 'https://openrouter.ai/api/v1', model: 'google/gemma-3-27b-it:free', hint: 'Clé gratuite : <span class="text-neutral-300">openrouter.ai/keys</span>' },
+  pollinations: { base: 'https://text.pollinations.ai/openai', model: 'openai', hint: 'Sans clé ni compte. Service public : les légendes (publiques) transitent par un tiers.' },
+};
+$('#apiPreset').onchange = e => { const p = API_PRESETS[e.target.value]; if (!p) return; scheduleSave({ api_base_url: p.base, api_model: p.model }); renderConfig(); };
+$('#apiBase').oninput = e => scheduleSave({ api_base_url: e.target.value.trim() });
+$('#apiModel').oninput = e => scheduleSave({ api_model: e.target.value.trim() });
+$('#apiKey').oninput = e => scheduleSave({ api_key: e.target.value.trim() });
+$('#apiTest').onclick = async () => {
+  const hint = $('#apiHint'); hint.textContent = 'Test en cours…'; hint.className = 'text-xs text-mute';
+  await new Promise(r => setTimeout(r, 900));
+  try { const r = await api('/api/analyzer/status'); hint.textContent = r.message; hint.className = 'text-xs ' + (r.ok ? 'text-green-400' : 'text-amber-300'); }
+  catch (e) { hint.textContent = e.message; hint.className = 'text-xs text-red-400'; }
+};
 $('#analyzerMode').onchange = e => { scheduleSave({ analyzer_mode: e.target.value }); renderConfig(); };
 $('#ollamaModel').oninput = e => scheduleSave({ ollama_model: e.target.value.trim() });
 $('#defaultAnswer').oninput = e => scheduleSave({ default_answer: e.target.value });
