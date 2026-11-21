@@ -727,6 +727,7 @@ async def repost_post(page: Page, via_story_note: bool = False) -> str:
         page.get_by_text(REPOST_ITEM_RE),
     ]
     menu_seen = False
+    new_state, after = state, before
     for cand in candidates:
         try:
             item = cand.first
@@ -742,7 +743,7 @@ async def repost_post(page: Page, via_story_note: bool = False) -> str:
         await asyncio.sleep(1.0)
         await check_blocked(page)
         new_state, after = await _repost_marker(page)
-        if new_state is not None and _is_one_of(new_state, REPOSTED_LABELS):
+        if new_state is not None and (_is_one_of(new_state, REPOSTED_LABELS) or _lab(new_state) != _lab(state)):
             return "republié (vérifié)" + (" — la story directe n'est pas proposée sur Instagram web" if via_story_note else "")
         b, a = _to_int(before), _to_int(after)
         if b is not None and a is not None and a > b:
@@ -759,11 +760,11 @@ async def repost_post(page: Page, via_story_note: bool = False) -> str:
     raise RuntimeError(
         "republication non confirmée par Instagram"
         + ("" if menu_seen else " (le choix « Republier » n'est pas apparu)")
-        + f" (icônes visibles : {await _icons_seen(page)})"
+        + f" [icône avant « {state} » / après « {new_state} », compteur {before} → {after}]"
     )
 
 
-FOLLOWING_RE = re.compile(r"^(Following|Abonné\(e\)|Abonné|Abonnée|Abonnés?|Requested|Demandé|Demande envoyée)", re.I)
+FOLLOWING_RE = re.compile(r"^(Following|Abonné\(e\)|Abonné|Abonnée|Abonnés?|Suivi\(e\)|Suivi|Suivie|Requested|Demandé|Demande envoyée)", re.I)
 FOLLOW_BTN_RE = re.compile(r"^(Follow|Suivre|Follow Back|Suivre en retour|S'abonner)$", re.I)
 
 
