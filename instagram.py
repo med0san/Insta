@@ -329,6 +329,14 @@ async def collect_hashtag_posts(page: Page, tag: str, limit: int) -> list[str]:
 AUTHOR_RE = re.compile(r"-\s*([A-Za-z0-9._]{1,30})\s+(?:on|le|el|am)\s", re.I)
 
 
+async def open_post(page: Page, url: str) -> None:
+    """Ouvre un post (avant de participer) en vérifiant session et blocage."""
+    await page.goto(url, wait_until="domcontentloaded")
+    await human_delay(2.5, 5)
+    check_logged_in(page)
+    await check_blocked(page)
+
+
 async def read_post(page: Page, url: str) -> dict[str, Any]:
     await page.goto(url, wait_until="domcontentloaded")
     await human_delay(2.5, 5)
@@ -495,52 +503,135 @@ async def fetch_image_b64(page: Page, image_url: str | None) -> str | None:
 # ---------------------------------------------------------------------------
 # Actions (mode réel)
 # ---------------------------------------------------------------------------
-LIKE_SEL = 'svg[aria-label="Like"], svg[aria-label="J’aime"], svg[aria-label="J\'aime"]'
-UNLIKE_SEL = (
-    'svg[aria-label="Unlike"], svg[aria-label="Je n’aime plus"], svg[aria-label="Je n\'aime plus"]'
-)
+# ---------------------------------------------------------------------------
+# Icônes d'action du post (like, enregistrer, partager…)
+#
+# Une page de post contient AUSSI des cœurs « J'aime » de commentaires, souvent placés AVANT la barre d'actions
+# dans le DOM : prendre « la première icône » likait un commentaire (ou rien). On ne retient donc que l'icône qui
+# se trouve dans le même bloc que l'icône « Commenter » (= la barre d'actions du post), et on vérifie le résultat.
+# ---------------------------------------------------------------------------
+LIKE_LABELS = ["Like", "J'aime"]
+UNLIKE_LABELS = ["Unlike", "Je n'aime plus"]
+SAVE_LABELS = ["Save", "Enregistrer"]
+UNSAVE_LABELS = ["Remove", "Retirer", "Supprimer", "Unsave", "Ne plus enregistrer"]
+SHARE_LABELS = ["Share", "Share Post", "Partager", "Partager la publication", "Send", "Envoyer"]
+REPOST_LABELS = ["Repost", "Republier", "Republication"]
+REPOSTED_LABELS = ["Reposted", "Republié", "Republiée", "Remove repost", "Undo repost", "Annuler la republication",
+                   "Supprimer la republication"]
+COMMENT_LABELS = ["Comment", "Commenter", "Comentar", "Kommentieren"]
+
+_FIND_JS = """
+([labels, comments, attr, strict]) => {
+  document.querySelectorAll('[' + attr + ']').forEach(e => e.removeAttribute(attr));
+  const norm = s => (s || '').replace(/[\\u2019\\u2018]/g, "'").toLowerCase().trim();
+  const want = labels.map(norm), com = comments.map(norm);
+  const svgs = [...document.querySelectorAll('svg[aria-label]')].filter(e => e.getClientRects().length > 0);
+  const commentIcons = svgs.filter(s => com.includes(norm(s.getAttribute('aria-label'))));
+  for (const el of svgs) {
+    const lab = norm(el.getAttribute('aria-label'));
+    if (!want.includes(lab)) continue;
+    if (!strict) { el.setAttribute(attr, '1'); return el.getAttribute('aria-label'); }
+    // plus petit bloc contenant à la fois cette icône et une icône « Commenter » = la barre d'actions du post.
+    // Un cœur de commentaire n'y est jamais seul : son plus petit bloc commun avec « Commenter » contient
+    // aussi d'autres cœurs (ceux des autres commentaires et celui du post).
+    let p = el.parentElement;
+    while (p && !commentIcons.some(c => p.contains(c))) p = p.parentElement;
+    if (!p) continue;
+    const same = svgs.filter(s => want.includes(norm(s.getAttribute('aria-label'))) && p.contains(s));
+    if (same.length === 1) { el.setAttribute(attr, '1'); return el.getAttribute('aria-label'); }
+  }
+  return null;
+}
+"""
+_ATTR = "data-gb-act"
+
+
+def _lab(text: str | None) -> str:
+    return (text or "").replace("’", "'").replace("‘", "'").lower().strip()
+
+
+def _is_one_of(label: str | None, labels: list[str]) -> bool:
+    return _lab(label) in {_lab(x) for x in labels}
+
+
+async def _find_action(page: Page, labels: list[str], strict: bool = True) -> str | None:
+    """Repère l'icône d'action (et la marque dans le DOM). Renvoie son libellé, ou None."""
+    try:
+        return await page.evaluate(_FIND_JS, [labels, COMMENT_LABELS, _ATTR, strict])
+    except Exception:
+        return None
+
+
+async def _click_action(page: Page) -> None:
+    icon = page.locator(f'[{_ATTR}="1"]').first
+    button = icon.locator("xpath=ancestor::*[@role='button' or self::button][1]")
+    target = button if await button.count() else icon
+    await target.scroll_into_view_if_needed(timeout=4000)
+    await target.click(timeout=6000)
+
+
+async def _icons_seen(page: Page) -> str:
+    try:
+        names = await page.eval_on_selector_all(
+            "svg[aria-label]", "els => [...new Set(els.filter(e => e.getClientRects().length).map(e => e.getAttribute('aria-label')))]"
+        )
+        return ", ".join(names[:25])
+    except Exception:
+        return "?"
+
+
+async def _toggle_action(page: Page, off_labels: list[str], on_labels: list[str], what: str, done_word: str) -> str:
+    """Clique l'icône du POST puis VÉRIFIE qu'elle est passée à l'état « fait » (plusieurs tentatives)."""
+    state = await _find_action(page, off_labels + on_labels)
+    if state is None:
+        raise RuntimeError(
+            f"bouton « {what} » du post introuvable (icônes visibles : {await _icons_seen(page)})"
+        )
+    if _is_one_of(state, on_labels):
+        return f"déjà {done_word}"
+    for attempt in range(3):
+        if attempt < 2:
+            await _click_action(page)
+        else:
+            await _double_tap_media(page)        # dernier recours pour le like : double-clic sur l'image
+        for _ in range(4):                       # l'état met un instant à changer
+            await asyncio.sleep(1.0)
+            await check_blocked(page)
+            state = await _find_action(page, off_labels + on_labels)
+            if _is_one_of(state, on_labels):
+                return f"{done_word} (vérifié)"
+        if state is None:
+            break
+    raise RuntimeError(f"« {what} » non pris en compte par Instagram (l'icône n'a pas changé d'état)")
+
+
+async def _double_tap_media(page: Page) -> None:
+    media = page.locator("article img, main img").first
+    await media.scroll_into_view_if_needed(timeout=3000)
+    await media.dblclick(timeout=5000)
 
 
 async def like_post(page: Page) -> str:
-    try:
-        if await page.locator(UNLIKE_SEL).first.is_visible(timeout=1500):
-            return "déjà liké"
-    except Exception:
-        pass
-    like = page.locator(LIKE_SEL).first
-    await like.wait_for(state="visible", timeout=8000)
-    await like.click()
-    await asyncio.sleep(2)
-    await check_blocked(page)
-    return "liké"
-
-
-SAVE_SEL = 'svg[aria-label="Save"], svg[aria-label="Enregistrer"]'
-UNSAVE_SEL = (
-    'svg[aria-label="Remove"], svg[aria-label="Retirer"], svg[aria-label="Supprimer"], '
-    'svg[aria-label="Unsave"], svg[aria-label="Ne plus enregistrer"]'
-)
+    return await _toggle_action(page, LIKE_LABELS, UNLIKE_LABELS, "J'aime", "liké")
 
 
 async def save_post(page: Page) -> str:
-    try:
-        if await page.locator(UNSAVE_SEL).first.is_visible(timeout=1200):
-            return "déjà enregistré"
-    except Exception:
-        pass
-    btn = page.locator(SAVE_SEL).first
-    await btn.wait_for(state="visible", timeout=8000)
-    await btn.click()
-    await asyncio.sleep(2)
-    await check_blocked(page)
-    return "enregistré"
+    # pas de double-clic de secours ici : seul le like l'utilise
+    state = await _find_action(page, SAVE_LABELS + UNSAVE_LABELS)
+    if state is None:
+        raise RuntimeError(f"bouton « Enregistrer » du post introuvable (icônes visibles : {await _icons_seen(page)})")
+    if _is_one_of(state, UNSAVE_LABELS):
+        return "déjà enregistré"
+    for _ in range(2):
+        await _click_action(page)
+        for _ in range(4):
+            await asyncio.sleep(1.0)
+            await check_blocked(page)
+            if _is_one_of(await _find_action(page, SAVE_LABELS + UNSAVE_LABELS), UNSAVE_LABELS):
+                return "enregistré (vérifié)"
+    raise RuntimeError("« Enregistrer » non pris en compte par Instagram")
 
 
-REPOST_SEL = 'svg[aria-label="Repost"], svg[aria-label="Republier"], svg[aria-label="Republication"]'
-SHARE_SEL = (
-    'svg[aria-label="Share"], svg[aria-label="Share Post"], svg[aria-label="Partager"], '
-    'svg[aria-label="Partager la publication"], svg[aria-label="Send"], svg[aria-label="Envoyer"]'
-)
 STORY_ITEM_RE = re.compile(r"((?:add|share|post)\b.{0,25}\bstor(?:y|ies)|(?:ajouter|partager|publier)\b.{0,30}\bstory)", re.I)
 last_share_options: list[str] = []   # textes vus dans le menu « Partager » (diagnostic affiché dans les logs)
 
@@ -548,9 +639,9 @@ last_share_options: list[str] = []   # textes vus dans le menu « Partager » (d
 async def share_to_story(page: Page) -> str:
     """Story si le menu de partage la propose, sinon republication (bouton ↻ d'Instagram web)."""
     try:
-        share = page.locator(SHARE_SEL).first
-        await share.wait_for(state="visible", timeout=6000)
-        await share.click()
+        if await _find_action(page, SHARE_LABELS) is None:
+            await _find_action(page, SHARE_LABELS, strict=False)
+        await _click_action(page)
         await asyncio.sleep(2)
         global last_share_options
         try:
@@ -581,22 +672,107 @@ async def share_to_story(page: Page) -> str:
         pass
     await asyncio.sleep(1)
 
-    repost = page.locator(REPOST_SEL).first
+    return await repost_post(page, via_story_note=True)
+
+
+REPOST_ITEM_RE = re.compile(r"^(Repost|Republier|Republication)$", re.I)
+REPOST_TOAST_RE = re.compile(r"(Reposted|Republié|Republiée|Republication (?:ajoutée|effectuée)|Vous avez republié)", re.I)
+
+_COUNT_JS = """
+(attr) => {
+  const el = document.querySelector('[' + attr + '="1"]');
+  let p = el;
+  for (let i = 0; i < 4 && p; i++, p = p.parentElement) {
+    const t = (p.innerText || '').trim();
+    if (/\\d/.test(t) && t.length < 12) return t;
+  }
+  return null;
+}
+"""
+
+
+def _to_int(text: str | None) -> int | None:
+    t = (text or "").strip().replace("\u202f", "").replace(" ", "")
+    return int(t) if t.isdigit() else None   # « 1,3 k » : pas comparable à l'unité près
+
+
+async def _repost_marker(page: Page) -> tuple[str | None, str | None]:
+    """(libellé de l'icône republier, compteur affiché à côté)."""
+    state = await _find_action(page, REPOST_LABELS + REPOSTED_LABELS)
+    if state is None:
+        state = await _find_action(page, REPOST_LABELS + REPOSTED_LABELS, strict=False)
+    if state is None:
+        return None, None
     try:
-        await repost.wait_for(state="visible", timeout=6000)
-    except PWTimeout:
-        raise RuntimeError("ni option « story » ni bouton de republication trouvés sur ce post")
-    await repost.click()
-    await asyncio.sleep(2)
+        return state, await page.evaluate(_COUNT_JS, _ATTR)
+    except Exception:
+        return state, None
+
+
+async def repost_post(page: Page, via_story_note: bool = False) -> str:
+    """Republie le post (bouton ↻) : ouvre le menu, choisit « Republier », puis VÉRIFIE l'effet."""
+    state, before = await _repost_marker(page)
+    if state is None:
+        raise RuntimeError(f"bouton de republication introuvable (icônes visibles : {await _icons_seen(page)})")
+    if _is_one_of(state, REPOSTED_LABELS):
+        return "déjà republié"
+    await _click_action(page)
+    await asyncio.sleep(1.5)
+
+    # Instagram propose un petit menu (« Republier » / « Citer ») : on choisit « Republier ».
+    # (Le bouton ↻ lui-même est exclu pour ne pas le cliquer une 2e fois, ce qui annulerait la republication.)
+    candidates = [
+        page.get_by_role("menuitem", name=REPOST_ITEM_RE),
+        page.get_by_role("button", name=REPOST_ITEM_RE).filter(has_not=page.locator(f'[{_ATTR}="1"]')),
+        page.get_by_text(REPOST_ITEM_RE),
+    ]
+    menu_seen = False
+    for cand in candidates:
+        try:
+            item = cand.first
+            if await item.is_visible(timeout=1500):
+                await item.click(timeout=4000)
+                menu_seen = True
+                break
+        except Exception:
+            continue
+
+    # vérification : l'icône change, le compteur augmente, ou un message de confirmation apparaît
+    for _ in range(6):
+        await asyncio.sleep(1.0)
+        await check_blocked(page)
+        new_state, after = await _repost_marker(page)
+        if new_state is not None and _is_one_of(new_state, REPOSTED_LABELS):
+            return "republié (vérifié)" + (" — la story directe n'est pas proposée sur Instagram web" if via_story_note else "")
+        b, a = _to_int(before), _to_int(after)
+        if b is not None and a is not None and a > b:
+            return "republié (vérifié : compteur +1)" + (" — story directe indisponible sur le web" if via_story_note else "")
+        try:
+            if await page.get_by_text(REPOST_TOAST_RE).first.is_visible(timeout=300):
+                return "republié (vérifié : confirmation affichée)"
+        except Exception:
+            pass
     try:
-        confirm = page.get_by_role("button", name=re.compile(r"^(Repost|Republier|Republication)$", re.I)).first
-        if await confirm.is_visible(timeout=3000):
-            await confirm.click()
+        await page.keyboard.press("Escape")
     except Exception:
         pass
-    await asyncio.sleep(3)
-    await check_blocked(page)
-    return "republié (la story directe n'est pas proposée sur Instagram web)"
+    raise RuntimeError(
+        "republication non confirmée par Instagram"
+        + ("" if menu_seen else " (le choix « Republier » n'est pas apparu)")
+        + f" (icônes visibles : {await _icons_seen(page)})"
+    )
+
+
+FOLLOWING_RE = re.compile(r"^(Following|Abonné\(e\)|Abonné|Abonnée|Abonnés?|Requested|Demandé|Demande envoyée)", re.I)
+FOLLOW_BTN_RE = re.compile(r"^(Follow|Suivre|Follow Back|Suivre en retour|S'abonner)$", re.I)
+
+
+async def _buttons_seen(page: Page) -> str:
+    try:
+        names = await page.get_by_role("button").all_inner_texts()
+        return " | ".join(dict.fromkeys(n.strip() for n in names if n.strip()))[:200] or "aucun"
+    except Exception:
+        return "?"
 
 
 async def follow_account(page: Page, account: str) -> str:
@@ -604,25 +780,32 @@ async def follow_account(page: Page, account: str) -> str:
     await human_delay(2.5, 5)
     check_logged_in(page)
     await check_blocked(page)
-    already = page.get_by_role(
-        "button", name=re.compile(r"^(Following|Abonné\(e\)|Abonné|Abonnée|Requested|Demandé)", re.I)
-    )
-    try:
-        if await already.first.is_visible(timeout=1500):
-            return "déjà suivi"
-    except Exception:
-        pass
-    btn = page.get_by_role(
-        "button", name=re.compile(r"^(Follow|Suivre|Follow Back|Suivre en retour)$", re.I)
-    ).first
-    try:
-        await btn.wait_for(state="visible", timeout=8000)
-    except PWTimeout:
-        return "bouton Suivre introuvable"
-    await btn.click()
-    await asyncio.sleep(2)
-    await check_blocked(page)
-    return "suivi"
+    for attempt in range(2):
+        try:
+            if await page.get_by_role("button", name=FOLLOWING_RE).first.is_visible(timeout=1500):
+                return "déjà suivi"
+        except Exception:
+            pass
+        btn = page.get_by_role("button", name=FOLLOW_BTN_RE).first
+        try:
+            await btn.wait_for(state="visible", timeout=8000)
+        except PWTimeout:
+            if attempt == 0:                       # page parfois lente / incomplète : on recharge une fois
+                await page.reload(wait_until="domcontentloaded")
+                await human_delay(2.5, 4)
+                continue
+            raise RuntimeError(f"bouton Suivre introuvable sur @{account} (boutons vus : {await _buttons_seen(page)})")
+        await btn.click()
+        for _ in range(4):
+            await asyncio.sleep(1.0)
+            await check_blocked(page)
+            try:
+                if await page.get_by_role("button", name=FOLLOWING_RE).first.is_visible(timeout=500):
+                    return "suivi (vérifié)"
+            except Exception:
+                pass
+        raise RuntimeError(f"clic sur Suivre sans effet pour @{account} (boutons vus : {await _buttons_seen(page)})")
+    raise RuntimeError(f"@{account} : impossible de suivre")
 
 
 async def post_comment(page: Page, url: str, text: str) -> str:
@@ -653,4 +836,10 @@ async def post_comment(page: Page, url: str, text: str) -> str:
         await page.keyboard.press("Enter")
     await asyncio.sleep(3)
     await check_blocked(page)
-    return "commenté"
+    try:
+        leftover = (await box.input_value(timeout=2000)).strip()
+    except Exception:
+        leftover = ""
+    if leftover:
+        raise RuntimeError("le commentaire n'a pas été publié (le texte est resté dans la zone de saisie)")
+    return "commenté (zone de saisie vidée)"

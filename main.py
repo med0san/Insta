@@ -16,6 +16,7 @@ import instagram as ig
 from auth import auth
 from analyzer import analyze_caption, api_status, ollama_status
 from bot import bot, build_plan
+from priority import clean_keywords, score_result
 from logbus import bus
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -59,6 +60,8 @@ class ConfigIn(BaseModel):
     headless: bool | None = None
     posts_per_hashtag: int | None = Field(default=None, ge=1, le=200)
     block_cooldown_min: int | None = Field(default=None, ge=10, le=1440)
+    priority_mode: Literal["off", "deadline", "balanced", "gaming"] | None = None
+    priority_keywords: list[str] | None = None
     do_story: bool | None = None
     force_participate: bool | None = None
     speed: Literal["human", "fast"] | None = None
@@ -138,6 +141,8 @@ async def put_config(body: ConfigIn):
     values = body.model_dump(exclude_none=True)
     if "friends_to_tag" in values:
         values["friends_to_tag"] = _clean_handles(values["friends_to_tag"], "@")
+    if "priority_keywords" in values:
+        values["priority_keywords"] = clean_keywords(values["priority_keywords"])
     if "hashtags" in values:
         values["hashtags"] = _clean_handles(values["hashtags"], "#")
     cfg = await db.set_config(values)
@@ -163,7 +168,11 @@ async def analyze_preview(body: AnalyzeIn):
     result = await analyze_caption(body.caption, author, body.post_date, None, cfg)
     plan = build_plan(result, cfg) if result["is_giveaway"] and result["is_active"] else None
     public = {k: v for k, v in result.items() if not k.startswith("_")}
-    return {"result": public, "plan": plan, "mode": cfg.get("analyzer_mode", "rules")}
+    score = None
+    if plan is not None:
+        pts, why = score_result(result, body.caption, cfg)
+        score = {"score": pts, "why": why, "mode": cfg.get("priority_mode", "balanced")}
+    return {"result": public, "plan": plan, "mode": cfg.get("analyzer_mode", "rules"), "priority": score}
 
 
 @app.post("/api/session/check")

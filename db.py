@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "ollama_url": "http://localhost:11434",
     "bot_enabled": False,      # le bot doit tourner : relancé automatiquement si le serveur redémarre
     "block_cooldown_min": 120, # pause (minutes) après un « Action bloquée », puis reprise automatique
+    "priority_mode": "balanced",  # off | deadline | balanced | gaming  (voir priority.py)
+    "priority_keywords": [],      # vide = liste par défaut PS5 / PC / jeux vidéo
     "do_story": True,          # republier / mettre en story quand le concours le demande
     "force_participate": True, # participer même si une condition est impossible (participation partielle)
     "speed": "human",          # "human" (3-9 s / 45-120 s) ou "fast" (1,5-4 s / 10-25 s)
@@ -55,6 +57,17 @@ async def init_db() -> None:
             )"""
         )
         await db.execute("CREATE INDEX IF NOT EXISTS idx_history_created ON history(created_at)")
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS candidates (
+                url TEXT PRIMARY KEY,
+                author TEXT,
+                hashtag TEXT,
+                caption TEXT,
+                result TEXT NOT NULL,
+                end_date TEXT,
+                created_at TEXT NOT NULL
+            )"""
+        )
         async with db.execute("PRAGMA table_info(history)") as cur:
             cols = {row[1] async for row in cur}
         for col in ("caption", "actions"):          # migration des bases existantes
@@ -100,6 +113,53 @@ async def set_config(values: dict[str, Any]) -> dict[str, Any]:
             )
         await db.commit()
     return await get_config()
+
+
+async def add_candidate(url: str, author: str | None, hashtag: str | None, caption: str,
+                        result: dict[str, Any], end_date: str | None) -> None:
+    now = datetime.now().isoformat(timespec="seconds")
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO candidates(url, author, hashtag, caption, result, end_date, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (url, author, hashtag, caption, json.dumps(result, ensure_ascii=False), end_date, now),
+        )
+        await db.commit()
+
+
+async def list_candidates() -> list[dict[str, Any]]:
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute("SELECT * FROM candidates ORDER BY created_at") as cur:
+            rows = [dict(r) async for r in cur]
+    for r in rows:
+        try:
+            r["result"] = json.loads(r["result"])
+        except (TypeError, ValueError):
+            r["result"] = {}
+    return rows
+
+
+async def remove_candidate(url: str) -> None:
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM candidates WHERE url = ?", (url,))
+        await db.commit()
+
+
+async def purge_candidates(max_age_days: int = 3) -> None:
+    limit = (datetime.now() - timedelta(days=max_age_days)).isoformat(timespec="seconds")
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("DELETE FROM candidates WHERE created_at < ?", (limit,))
+        await db.commit()
+
+
+async def url_known(url: str) -> bool:
+    """Déjà traité (historique) ou déjà en file d'attente."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM history WHERE url = ? UNION ALL SELECT 1 FROM candidates WHERE url = ?", (url, url)
+        ) as cur:
+            return await cur.fetchone() is not None
 
 
 async def url_exists(url: str) -> bool:

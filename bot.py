@@ -4,12 +4,13 @@ from __future__ import annotations
 import asyncio
 import random
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import db
 import instagram as ig
 import keepawake
+import priority
 from analyzer import AnalyzerError, analyze_caption
 from auth import auth
 from logbus import bus
@@ -25,6 +26,8 @@ BLOCK_COOLDOWN_MIN = 120          # pause après un « Action bloquée », puis 
 MAX_BLOCKS_24H = 3                # au-delà, le bot s'arrête pour de bon
 MAX_FAILURES = 8                  # cycles consécutifs en erreur avant arrêt
 MAX_POST_ERRORS = 6               # posts consécutifs en erreur avant redémarrage du navigateur
+TRIAGE_DELAY = (2.0, 5.0)         # entre deux lectures de posts (aucune action : plus court)
+MAX_TRIAGE_SECONDS = 25 * 60      # durée max de la phase de lecture avant de passer à la participation
 
 
 class StopBot(Exception):
@@ -219,29 +222,39 @@ class Bot:
         return cfg
 
     async def _cycle(self, page) -> int:
-        """Un passage sur tous les hashtags. Renvoie le nombre de posts examinés."""
+        """Un passage : 1) scanner et LIRE les posts, 2) participer du plus prioritaire au moins prioritaire."""
         cfg = await db.get_config()
         hashtags = [h.strip().lstrip("#") for h in cfg["hashtags"] if h.strip()]
         if not hashtags:
             bus.log("Aucun hashtag configuré.", "warning")
             return 0
+        await db.purge_candidates(3)
         examined = 0
         post_errors = 0
+        started = time.monotonic()
+        out_of_time = False
+
+        # ---- phase 1 : scan + lecture (aucune action sur Instagram) ----
         for tag in hashtags:
+            if out_of_time:
+                break
             self._check_stop()
-            cfg = await self._respect_quota(await db.get_config())  # la config est relue en direct
+            cfg = await db.get_config()  # la config est relue en direct
             self._set_activity(f"Scan #{tag}")
             bus.log(f"🔎 Scan du hashtag #{tag}…")
             limit = int(cfg.get("posts_per_hashtag", 12))
             urls = await ig.collect_hashtag_posts(page, tag, limit * 2)
-            new_urls = [u for u in urls if not await db.url_exists(u)][:limit]
+            new_urls = [u for u in urls if not await db.url_known(u)][:limit]
             bus.log(f"#{tag} : {len(urls)} posts trouvés, {len(new_urls)} nouveaux.")
             for url in new_urls:
                 self._check_stop()
-                cfg = await self._respect_quota(await db.get_config())
+                if time.monotonic() - started > MAX_TRIAGE_SECONDS:
+                    bus.log(f"Lecture limitée à {MAX_TRIAGE_SECONDS // 60} min : on passe à la participation.", "warning")
+                    out_of_time = True
+                    break
                 examined += 1
                 try:
-                    participated = await self._process_post(page, url, tag, cfg)
+                    await self._triage(page, url, tag, cfg)
                     post_errors = 0
                 except (ig.InstagramBlocked, ig.SessionExpired, StopBot, asyncio.CancelledError):
                     raise
@@ -252,15 +265,76 @@ class Bot:
                     bus.notify("history")
                     if post_errors >= MAX_POST_ERRORS:
                         raise RuntimeError(f"{post_errors} posts consécutifs en erreur") from e
-                    participated = False
-                if participated:
-                    await self._sleep(*self._pace(cfg)[1], label="Délai anti-détection entre concours")
-                else:
-                    await self._sleep(*self._pace(cfg)[0])
-            await self._sleep(*self._pace(cfg)[0])
+                await self._sleep(*TRIAGE_DELAY)
+
+        # ---- phase 2 : participation, du plus prioritaire au moins prioritaire ----
+        await self._log_queue(await db.get_config())
+        post_errors = 0
+        while True:
+            self._check_stop()
+            cfg = await self._respect_quota(await db.get_config())
+            cand = await self._next_candidate(cfg)
+            if cand is None:
+                break
+            bus.log(f"🎯 Prochain concours : @{cand['author'] or '?'} — score {cand['score']} ({cand['why']})", "success")
+            participated = False
+            try:
+                participated = await self._participate(page, cand, cfg)
+                post_errors = 0
+            except (ig.InstagramBlocked, ig.SessionExpired, StopBot, asyncio.CancelledError):
+                raise  # le concours reste en file d'attente et sera repris
+            except Exception as e:  # noqa: BLE001
+                post_errors += 1
+                await db.add_history(cand["url"], cand["author"], cand["hashtag"], "Erreur",
+                                     f"{type(e).__name__}: {str(e)[:150]}", caption=cand["caption"])
+                bus.log(f"Erreur sur {cand['url']} : {type(e).__name__}: {e} — on passe au suivant.", "error")
+                bus.notify("history")
+                if post_errors >= MAX_POST_ERRORS:
+                    await db.remove_candidate(cand["url"])
+                    raise RuntimeError(f"{post_errors} participations consécutives en erreur") from e
+            await db.remove_candidate(cand["url"])
+            await self._sleep(*(self._pace(cfg)[1] if participated else self._pace(cfg)[0]),
+                              label="Délai anti-détection entre concours" if participated else None)
         return examined
 
-    async def _process_post(self, page, url: str, tag: str, cfg: dict[str, Any]) -> bool:
+    async def _ranked_candidates(self, cfg: dict[str, Any]) -> list[dict[str, Any]]:
+        """File d'attente triée. Écarte (et note dans l'historique) les concours expirés pendant l'attente."""
+        today = date.today()
+        alive: list[dict[str, Any]] = []
+        for r in await db.list_candidates():
+            d = priority.days_left(r.get("end_date"), today)
+            if d is not None and d < 0:
+                await db.add_history(r["url"], r["author"], r["hashtag"], "Ignoré",
+                                     f"Concours expiré pendant l'attente (fin le {r['end_date']}).", caption=r["caption"])
+                await db.remove_candidate(r["url"])
+                bus.notify("history")
+                continue
+            score, why = priority.score_result(r["result"], r["caption"], cfg, today)
+            alive.append({**r, "score": score, "why": why, "days": d})
+        if cfg.get("priority_mode", "balanced") == "off":
+            alive.sort(key=lambda c: c["created_at"])
+        else:
+            alive.sort(key=lambda c: (-c["score"], c["days"] if c["days"] is not None else 99999, c["created_at"]))
+        return alive
+
+    async def _next_candidate(self, cfg: dict[str, Any]) -> dict[str, Any] | None:
+        ranked = await self._ranked_candidates(cfg)
+        return ranked[0] if ranked else None
+
+    async def _log_queue(self, cfg: dict[str, Any]) -> None:
+        ranked = await self._ranked_candidates(cfg)
+        if not ranked:
+            bus.log("📋 File d'attente vide : rien à faire pour l'instant.", "info")
+            return
+        mode = priority.MODE_LABELS.get(cfg.get("priority_mode", "balanced"), "?")
+        bus.log(f"📋 {len(ranked)} concours en file d'attente (classement : {mode}). Ordre de participation :", "success")
+        for n, c in enumerate(ranked[:8], 1):
+            bus.log(f"   {n}. @{c['author'] or '?'} — score {c['score']} — {c['why']}", "info")
+        if len(ranked) > 8:
+            bus.log(f"   … et {len(ranked) - 8} autres", "debug")
+
+    async def _triage(self, page, url: str, tag: str, cfg: dict[str, Any]) -> bool:
+        """Lit et analyse un post ; s'il est intéressant il entre dans la file d'attente. Aucune action Instagram."""
         self._set_activity(f"Lecture {url}")
         try:
             post = await ig.read_post(page, url)
@@ -290,15 +364,9 @@ class Bot:
         if cfg.get("analyzer_mode") in ("ollama", "api"):
             image_b64 = await ig.fetch_image_b64(page, post.get("image_url"))
             bus.log("Image du post envoyée au modèle." if image_b64 else "Image indisponible : légende seule.", "debug")
-        try:
-            result = await analyze_caption(
-                caption, author, post["post_date"], image_b64, cfg,
-                post.get("collaborators"), post.get("tagged"),
-            )
-        except AnalyzerError as e:
-            await db.add_history(url, author, tag, "Erreur", str(e), caption=caption)
-            bus.notify("history")
-            raise
+        result = await analyze_caption(
+            caption, author, post["post_date"], image_b64, cfg, post.get("collaborators"), post.get("tagged"),
+        )
         bus.log(f"Analyse → giveaway={result['is_giveaway']} actif={result['is_active']} — {result['reason']}", "ai")
         for cond in result.get("conditions", []):
             bus.log(f"   • {cond}", "ai")
@@ -309,6 +377,15 @@ class Bot:
             bus.notify("history")
             return False
 
+        score, why = priority.score_result(result, caption, cfg)
+        public = {k: v for k, v in result.items() if not k.startswith("_")}
+        await db.add_candidate(url, author, tag, caption, public, result.get("end_date"))
+        bus.log(f"⭐ Ajouté à la file d'attente — score {score} ({why})", "success")
+        return True
+
+    async def _participate(self, page, cand: dict[str, Any], cfg: dict[str, Any]) -> bool:
+        """Participe à un concours de la file d'attente (like, enregistrer, commentaire, story, follows)."""
+        url, author, tag, caption, result = cand["url"], cand["author"], cand["hashtag"], cand["caption"], cand["result"]
         plan = build_plan(result, cfg)
         for note in plan["notes"]:
             bus.log(f"⚠ {note}", "warning")
@@ -332,6 +409,7 @@ class Bot:
 
         # ---- mode réel : chaque action est indépendante, un échec n'annule pas les suivantes ----
         self._set_activity(f"Participation @{author or '?'}")
+        await ig.open_post(page, url)
         report: list[dict[str, Any]] = []
         pace = self._pace(cfg)[0]
 
@@ -350,8 +428,7 @@ class Bot:
 
         async def on_post():
             if page.url.rstrip("/") != url.rstrip("/"):
-                await page.goto(url, wait_until="domcontentloaded")
-                await ig.human_delay(2, 4)
+                await ig.open_post(page, url)
 
         async def do_story():
             await on_post()
@@ -423,6 +500,7 @@ def build_plan(result: dict[str, Any], cfg: dict[str, Any], rng: random.Random |
         elif not force:
             skip = skip or "Une question demande une réponse et aucune réponse par défaut n'est configurée."
 
+    needed = max(0, min(needed, len(pool)))
     friends = rng.sample(pool, needed) if needed else []
     parts = [p for p in (result.get("custom_keyword"), answer) if p] + [f"@{f}" for f in friends]
     if not parts and result.get("needs_comment"):

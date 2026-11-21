@@ -423,6 +423,12 @@ def _conditions(result: dict[str, Any], norm: str) -> list[str]:
     return out
 
 
+def _end_date_iso(caption: str, post_date: str | None) -> str | None:
+    """Date de fin du concours (ISO), pour classer les concours par échéance."""
+    found = _find_end_date(_norm(caption), _parse_post_date(post_date) or date.today())
+    return found[0].isoformat() if found else None
+
+
 def _activity(caption: str, post_date: str | None, details: list[str]) -> tuple[bool, str]:
     """(terminé ?, raison) d'après les annonces de gagnants et les dates de fin — déterministe."""
     norm = _norm(caption)
@@ -472,6 +478,7 @@ def analyze_sync(
         "unsupported": [],
         "conditions": [],
         "reason": "",
+        "end_date": None,
         "_hard_inactive": False,
         "_details": [],
     }
@@ -488,6 +495,7 @@ def analyze_sync(
         return result
 
     result["is_giveaway"] = True
+    result["end_date"] = _end_date_iso(caption, post_date)
     result["accounts_to_follow"] = _accounts_to_follow(caption, author, collaborators)
     result["follow_tagged"] = bool(TAGGED_RE.search(norm))
     if result["follow_tagged"]:
@@ -692,6 +700,7 @@ def _merge(rules: dict[str, Any], llm: dict[str, Any], caption: str, author: str
     else:
         hard, why = _activity(caption, post_date, details)
     out = dict(rules)
+    out["end_date"] = rules.get("end_date") or _end_date_iso(caption, post_date)
     out.update(
         is_giveaway=is_giveaway,
         # Dates de fin et annonces de gagnants : jugées par des règles déterministes (un petit modèle répond

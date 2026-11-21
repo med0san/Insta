@@ -133,6 +133,27 @@ l'extrait de légende qui le prouve.
 Gardé volontairement : l'**arrêt immédiat** si Instagram affiche « Action bloquée » / « Try Again Later ».
 Continuer après un blocage fait passer le compte en restriction, voire en suspension.
 
+## Priorité des concours
+
+Le bot ne participe plus dans l'ordre où il tombe sur les posts : il **lit d'abord tout ce qu'il trouve**, met les
+concours actifs en file d'attente, les **classe**, puis participe du plus au moins prioritaire. Aucun concours n'est
+écarté pour autant : les moins prioritaires passent en dernier.
+
+- **Échéance** : plus la fin est proche, plus le score est haut (finit aujourd'hui 100, demain 92, 3 j 76, 7 j 52,
+  14 j 31 ; sans date de fin : tout en bas). Un concours expiré pendant l'attente est écarté (noté dans l'historique).
+- **Gaming / PC** : bonus si la légende parle de PS5, PlayStation, Xbox, Nintendo, Switch, PC, PC gamer, RTX, carte
+  graphique, console, manette, jeux vidéo… (liste modifiable dans l'interface, un mot par virgule).
+- **Réglage « Priorité des concours »** : *Équilibré* (défaut : un concours gaming qui finit dans ~10 jours passe devant
+  un autre qui finit demain), *Échéance d'abord*, *Gaming / PC d'abord*, ou *ordre d'arrivée*.
+- Le classement et le score de chaque concours sont affichés dans les logs et dans « Tester une légende ».
+
+## Fiabilité des actions
+
+Chaque action est **vérifiée** avant d'être annoncée comme réussie, sinon elle apparaît en ✗ avec la raison :
+like (l'icône du *post* doit passer à « Unlike », pas celle d'un commentaire), enregistrer, suivre (le bouton doit
+passer à « Following »), commentaire (la zone de saisie doit se vider), republication (icône, compteur +1 ou message
+de confirmation). Instagram web ne propose pas « Ajouter à ma story » : le bot utilise le bouton ↻ republier.
+
 ## Mode autonome (toute la nuit)
 
 Le bot tourne en boucle sans surveillance :
