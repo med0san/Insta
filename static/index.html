@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="fr" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Giveaway Bot</title>
+  <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bg: '#0a0a0a', card: '#141414', line: '#262626', soft: '#1c1c1c',
+            mute: '#8a8a8a', accent: '#e4e4e7',
+          },
+          fontFamily: {
+            sans: ['Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
+            mono: ['JetBrains Mono', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root { color-scheme: dark; }
+    body { background: #0a0a0a; }
+    .card { background: #141414; border: 1px solid #262626; border-radius: 14px; }
+    .input { background: #0a0a0a; border: 1px solid #262626; border-radius: 9px; padding: .55rem .75rem; width: 100%; font-size: .875rem; color: #e5e5e5; outline: none; transition: border-color .15s; }
+    .input:focus { border-color: #525252; }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: .45rem; border-radius: 9px; padding: .55rem .95rem; font-size: .875rem; font-weight: 500; transition: background .15s, opacity .15s, border-color .15s; }
+    .btn:disabled { opacity: .4; cursor: not-allowed; }
+    .btn-primary { background: #fafafa; color: #0a0a0a; }
+    .btn-primary:hover:not(:disabled) { background: #d4d4d4; }
+    .btn-ghost { background: transparent; border: 1px solid #262626; color: #e5e5e5; }
+    .btn-ghost:hover:not(:disabled) { border-color: #404040; background: #1a1a1a; }
+    .btn-go { background: #16a34a; color: #fff; }
+    .btn-go:hover:not(:disabled) { background: #15803d; }
+    .btn-stop { background: #1f1111; color: #f87171; border: 1px solid #3f1d1d; }
+    .btn-stop:hover:not(:disabled) { background: #2a1414; }
+    .label { font-size: .75rem; font-weight: 500; color: #8a8a8a; text-transform: uppercase; letter-spacing: .06em; }
+    .chip { display: inline-flex; align-items: center; gap: .35rem; background: #1c1c1c; border: 1px solid #2e2e2e; border-radius: 999px; padding: .2rem .35rem .2rem .7rem; font-size: .8rem; color: #e5e5e5; }
+    .chip button { width: 1.15rem; height: 1.15rem; border-radius: 999px; color: #8a8a8a; display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+    .chip button:hover { background: #2e2e2e; color: #fff; }
+    .switch { position: relative; width: 42px; height: 24px; border-radius: 999px; background: #262626; transition: background .2s; flex-shrink: 0; }
+    .switch::after { content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 999px; background: #a3a3a3; transition: transform .2s, background .2s; }
+    .switch[aria-checked="true"] { background: #fafafa; }
+    .switch[aria-checked="true"]::after { transform: translateX(18px); background: #0a0a0a; }
+    input[type=range] { accent-color: #fafafa; }
+    .tab[aria-selected="true"] { background: #262626; color: #fafafa; }
+    #console::-webkit-scrollbar, .scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+    #console::-webkit-scrollbar-thumb, .scroll::-webkit-scrollbar-thumb { background: #262626; border-radius: 8px; }
+    .dot { width: 8px; height: 8px; border-radius: 999px; display: inline-block; }
+    .pulse { animation: pulse 1.6s ease-in-out infinite; }
+    @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .35 } }
+  </style>
+</head>
+<body class="min-h-screen font-sans text-neutral-200 antialiased">
+  <!-- Header -->
+  <header class="border-b border-line">
+    <div class="mx-auto max-w-7xl px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-3">
+      <div class="flex items-center gap-3">
+        <div class="h-9 w-9 rounded-[10px] border border-line bg-card flex items-center justify-center">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fafafa" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="8" width="18" height="13" rx="2"/><path d="M12 8v13M3 12h18M12 8c-1.5-3-5-4-5-1.5S10 8 12 8zm0 0c1.5-3 5-4 5-1.5S14 8 12 8z"/></svg>
+        </div>
+        <div>
+          <h1 class="text-[15px] font-semibold text-white leading-tight">Giveaway Bot</h1>
+          <p class="text-xs text-mute">Participation automatique aux concours Instagram</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 text-xs">
+        <span id="hdrSession" class="inline-flex items-center gap-2 rounded-full border border-line bg-card px-3 py-1.5"><span class="dot bg-neutral-600"></span><span>Session…</span></span>
+        <span id="hdrBot" class="inline-flex items-center gap-2 rounded-full border border-line bg-card px-3 py-1.5"><span class="dot bg-neutral-600"></span><span>Bot à l'arrêt</span></span>
+        <span id="hdrMode" class="inline-flex items-center rounded-full border border-line bg-card px-3 py-1.5 font-medium">—</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-7xl px-4 sm:px-6 py-6 space-y-6">
+    <div id="apiKeyWarn" class="hidden rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
+      <code class="font-mono">ANTHROPIC_API_KEY</code> n'est pas défini dans l'environnement du serveur : l'analyse IA des légendes échouera. Exportez la variable puis relancez le serveur.
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+      <!-- Colonne gauche -->
+      <div class="lg:col-span-5 space-y-6">
+        <!-- Connexion -->
+        <section class="card p-5">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-sm font-semibold text-white">Connexion Instagram</h2>
+            <span id="sessionBadge" class="text-xs rounded-full px-2.5 py-1 border border-line text-mute">…</span>
+          </div>
+
+          <div class="flex gap-1 p-1 rounded-[10px] bg-bg border border-line mb-4" role="tablist">
+            <button class="tab flex-1 rounded-md py-1.5 text-xs font-medium text-mute" aria-selected="true" data-tab="creds">Identifiants</button>
+            <button class="tab flex-1 rounded-md py-1.5 text-xs font-medium text-mute" aria-selected="false" data-tab="manual">Manuelle (Chromium)</button>
+          </div>
+
+          <div data-panel="creds" class="space-y-3">
+            <form id="loginForm" class="space-y-3" autocomplete="off">
+              <div>
+                <label class="label" for="igUser">Identifiant</label>
+                <input id="igUser" class="input mt-1.5" placeholder="nom d'utilisateur, e-mail ou téléphone" autocomplete="username" />
+              </div>
+              <div>
+                <label class="label" for="igPass">Mot de passe</label>
+                <input id="igPass" type="password" class="input mt-1.5" placeholder="••••••••" autocomplete="current-password" />
+                <p id="savedPassHint" class="hidden mt-1.5 text-xs text-mute">Mot de passe mémorisé — laissez vide pour l'utiliser.</p>
+              </div>
+              <label class="flex items-center gap-2 text-xs text-mute select-none cursor-pointer">
+                <input id="igRemember" type="checkbox" class="accent-white" />
+                Mémoriser le mot de passe (stocké en clair dans giveaways.db)
+              </label>
+              <button id="loginBtn" type="submit" class="btn btn-primary w-full">Se connecter</button>
+            </form>
+            <form id="twofaForm" class="hidden space-y-3 rounded-[10px] border border-amber-900/60 bg-amber-950/20 p-3">
+              <p class="text-xs text-amber-200">Instagram demande un code de vérification (SMS ou application d'authentification).</p>
+              <div class="flex gap-2">
+                <input id="twofaCode" class="input font-mono tracking-widest" inputmode="numeric" maxlength="8" placeholder="123456" />
+                <button id="twofaBtn" type="submit" class="btn btn-primary">Valider</button>
+              </div>
+            </form>
+          </div>
+
+          <div data-panel="manual" class="hidden space-y-3">
+            <p class="text-sm text-mute leading-relaxed">Ouvre une vraie fenêtre Chromium sur la page de connexion. Connectez-vous à la main (captcha, 2FA…) : la session est détectée automatiquement et sauvegardée dans <code class="font-mono text-neutral-300">./ig_session</code>.</p>
+            <button id="manualBtn" class="btn btn-ghost w-full">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18"/></svg>
+              Connexion manuelle (Chromium)
+            </button>
+          </div>
+
+          <p id="loginMsg" class="hidden mt-3 text-xs"></p>
+
+          <div class="mt-4 pt-4 border-t border-line flex items-center justify-between gap-2">
+            <span id="sessionChecked" class="text-xs text-mute">—</span>
+            <div class="flex gap-2">
+              <button id="checkBtn" class="btn btn-ghost !py-1.5 !px-3 text-xs">Vérifier</button>
+              <button id="logoutBtn" class="btn btn-ghost !py-1.5 !px-3 text-xs text-red-400">Déconnexion</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- Configuration -->
+        <section class="card p-5">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-sm font-semibold text-white">Configuration</h2>
+            <span id="saveState" class="text-xs text-mute transition-opacity">Enregistré</span>
+          </div>
+
+          <div class="space-y-5">
+            <div>
+              <label class="label" for="friendInput">Amis à identifier</label>
+              <div class="mt-1.5 flex gap-2">
+                <input id="friendInput" class="input" placeholder="@ami1  (Entrée pour ajouter, virgules acceptées)" />
+                <button id="friendAdd" class="btn btn-ghost">Ajouter</button>
+              </div>
+              <div id="friendChips" class="mt-2.5 flex flex-wrap gap-1.5"></div>
+            </div>
+
+            <div>
+              <label class="label" for="tagInput">Hashtags cibles</label>
+              <div class="mt-1.5 flex gap-2">
+                <input id="tagInput" class="input" placeholder="#concours" />
+                <button id="tagAdd" class="btn btn-ghost">Ajouter</button>
+              </div>
+              <div id="tagChips" class="mt-2.5 flex flex-wrap gap-1.5"></div>
+            </div>
+
+            <div>
+              <div class="flex items-center justify-between">
+                <label class="label" for="quotaRange">Quota journalier max</label>
+                <input id="quotaNum" type="number" min="1" max="200" class="input !w-20 !py-1 text-right font-mono" />
+              </div>
+              <input id="quotaRange" type="range" min="1" max="50" class="mt-3 w-full" />
+            </div>
+
+            <div>
+              <div class="flex items-center justify-between">
+                <label class="label" for="pphRange">Posts examinés / hashtag</label>
+                <span id="pphVal" class="font-mono text-sm text-neutral-300">12</span>
+              </div>
+              <input id="pphRange" type="range" min="1" max="50" class="mt-3 w-full" />
+            </div>
+
+            <div class="flex items-center justify-between gap-4 rounded-[10px] border border-line bg-bg px-3.5 py-3">
+              <div>
+                <p class="text-sm font-medium text-white">Mode Dry-Run (simulation)</p>
+                <p class="text-xs text-mute mt-0.5">Analyse et logue les actions sans rien cliquer.</p>
+              </div>
+              <button id="dryRun" class="switch" role="switch" aria-checked="true" aria-label="Mode Dry-Run"></button>
+            </div>
+
+            <div class="flex items-center justify-between gap-4 rounded-[10px] border border-line bg-bg px-3.5 py-3">
+              <div>
+                <p class="text-sm font-medium text-white">Navigateur invisible</p>
+                <p class="text-xs text-mute mt-0.5">Désactivez pour voir Chromium agir pendant le bot.</p>
+              </div>
+              <button id="headless" class="switch" role="switch" aria-checked="true" aria-label="Navigateur invisible"></button>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Colonne droite -->
+      <div class="lg:col-span-7 flex flex-col gap-6">
+        <!-- Contrôle -->
+        <section class="card p-5">
+          <div class="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h2 class="text-sm font-semibold text-white">Contrôle</h2>
+              <p id="activity" class="mt-1 text-xs text-mute">À l'arrêt</p>
+            </div>
+            <div class="flex gap-2">
+              <button id="startBtn" class="btn btn-go">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15l13-7.5z"/></svg>
+                Démarrer le bot
+              </button>
+              <button id="stopBtn" class="btn btn-stop">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="5" width="14" height="14" rx="2"/></svg>
+                Arrêter le bot
+              </button>
+            </div>
+          </div>
+          <div class="mt-5 grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div class="sm:col-span-2 rounded-[10px] border border-line bg-bg p-4">
+              <p class="label">Aujourd'hui</p>
+              <p class="mt-2 font-mono text-3xl text-white"><span id="todayCount">0</span><span class="text-mute text-xl"> / <span id="quotaShow">10</span></span> <span id="todayUnit" class="text-sm font-sans text-mute">participations</span></p>
+              <div class="mt-3 h-1.5 rounded-full bg-line overflow-hidden"><div id="todayBar" class="h-full bg-white transition-all" style="width:0%"></div></div>
+            </div>
+            <div class="rounded-[10px] border border-line bg-bg p-4 text-xs space-y-2">
+              <div class="flex justify-between"><span class="text-mute">Réelles</span><span id="todayReal" class="font-mono text-neutral-200">0</span></div>
+              <div class="flex justify-between"><span class="text-mute">Simulées</span><span id="todaySim" class="font-mono text-neutral-200">0</span></div>
+              <div class="flex justify-between"><span class="text-mute">Navigateur</span><span id="browserState" class="text-neutral-200 truncate max-w-[60%] text-right">libre</span></div>
+            </div>
+          </div>
+          <p id="botError" class="hidden mt-3 text-xs text-red-400"></p>
+        </section>
+
+        <!-- Console -->
+        <section class="card overflow-hidden flex flex-col flex-1">
+          <div class="flex items-center justify-between px-5 py-3 border-b border-line">
+            <div class="flex items-center gap-2">
+              <h2 class="text-sm font-semibold text-white">Logs en temps réel</h2>
+              <span id="wsState" class="dot bg-neutral-600" title="WebSocket"></span>
+            </div>
+            <div class="flex items-center gap-3 text-xs text-mute">
+              <label class="flex items-center gap-1.5 cursor-pointer select-none"><input id="autoscroll" type="checkbox" checked class="accent-white" /> Auto-scroll</label>
+              <button id="clearLogs" class="hover:text-white">Effacer</button>
+            </div>
+          </div>
+          <div id="console" class="h-[380px] lg:h-auto lg:flex-1 lg:min-h-[380px] lg:basis-0 overflow-y-auto bg-[#0b0b0b] px-4 py-3 font-mono text-[12.5px] leading-[1.65]"></div>
+        </section>
+      </div>
+    </div>
+
+    <!-- Historique -->
+    <section class="card overflow-hidden">
+      <div class="flex flex-wrap items-center justify-between gap-3 px-5 py-3 border-b border-line">
+        <div class="flex items-center gap-3">
+          <h2 class="text-sm font-semibold text-white">Historique</h2>
+          <span id="histCount" class="text-xs text-mute"></span>
+        </div>
+        <div class="flex items-center gap-2">
+          <select id="histFilter" class="input !w-auto !py-1.5 text-xs">
+            <option value="">Tous les statuts</option>
+            <option>Participé</option><option>Simulé</option><option>Ignoré</option><option>Erreur</option>
+          </select>
+          <button id="histClear" class="btn btn-ghost !py-1.5 !px-3 text-xs">Vider</button>
+        </div>
+      </div>
+      <div class="scroll overflow-x-auto max-h-[520px] overflow-y-auto">
+        <table class="w-full text-sm">
+          <thead class="sticky top-0 bg-card text-left">
+            <tr class="text-xs text-mute border-b border-line">
+              <th class="px-5 py-2.5 font-medium whitespace-nowrap">Date</th>
+              <th class="px-3 py-2.5 font-medium">Compte</th>
+              <th class="px-3 py-2.5 font-medium">Post</th>
+              <th class="px-3 py-2.5 font-medium">Statut</th>
+              <th class="px-3 py-2.5 font-medium">Raison (IA)</th>
+              <th class="px-5 py-2.5 font-medium">Commentaire</th>
+            </tr>
+          </thead>
+          <tbody id="histBody"></tbody>
+        </table>
+        <p id="histEmpty" class="hidden px-5 py-10 text-center text-sm text-mute">Aucun concours traité pour l'instant.</p>
+      </div>
+    </section>
+  </main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+  let data = null;
+  try { data = await res.json(); } catch { /* vide */ }
+  if (!res.ok) throw new Error((data && data.detail) || res.statusText);
+  return data;
+}
+
+// ---------------- Config ----------------
+let config = { friends_to_tag: [], hashtags: [], daily_quota: 10, dry_run: true, headless: true, posts_per_hashtag: 12 };
+let saveTimer = null;
+
+function scheduleSave(patch) {
+  Object.assign(config, patch);
+  $('#saveState').textContent = 'Enregistrement…';
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try {
+      const { friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag } = config;
+      const saved = await api('/api/config', { method: 'PUT', body: JSON.stringify({ friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag }) });
+      config = { ...config, ...saved };
+      renderConfig();
+      $('#saveState').textContent = 'Enregistré ✓';
+      refreshStatus();
+    } catch (e) { $('#saveState').textContent = 'Erreur : ' + e.message; }
+  }, 350);
+}
+
+function renderChips(el, items, prefix, key) {
+  el.innerHTML = items.length ? '' : `<span class="text-xs text-mute">Aucun élément.</span>`;
+  items.forEach((it, i) => {
+    const chip = document.createElement('span');
+    chip.className = 'chip';
+    chip.innerHTML = `<span>${prefix}${esc(it)}</span><button title="Supprimer" aria-label="Supprimer">×</button>`;
+    chip.querySelector('button').onclick = () => {
+      const next = config[key].filter((_, j) => j !== i);
+      scheduleSave({ [key]: next }); renderConfig();
+    };
+    el.appendChild(chip);
+  });
+}
+
+function setSwitch(el, v) { el.setAttribute('aria-checked', v ? 'true' : 'false'); }
+
+function renderConfig() {
+  renderChips($('#friendChips'), config.friends_to_tag, '@', 'friends_to_tag');
+  renderChips($('#tagChips'), config.hashtags, '#', 'hashtags');
+  $('#quotaRange').value = Math.min(config.daily_quota, 50);
+  if (document.activeElement !== $('#quotaNum')) $('#quotaNum').value = config.daily_quota;
+  $('#pphRange').value = config.posts_per_hashtag; $('#pphVal').textContent = config.posts_per_hashtag;
+  setSwitch($('#dryRun'), config.dry_run);
+  setSwitch($('#headless'), config.headless);
+  if (config.ig_username && !$('#igUser').value) $('#igUser').value = config.ig_username;
+  $('#savedPassHint').classList.toggle('hidden', !config.has_saved_password);
+  $('#igRemember').checked = $('#igRemember').checked || !!config.has_saved_password;
+}
+
+function addItems(inputEl, key, prefix) {
+  const raw = inputEl.value.split(/[\s,;]+/).map(s => s.trim().replace(new RegExp('^\\' + prefix + '+'), '')).filter(Boolean);
+  if (!raw.length) return;
+  const existing = new Set(config[key].map(s => s.toLowerCase()));
+  const next = [...config[key]];
+  raw.forEach(r => { if (!existing.has(r.toLowerCase())) { next.push(r); existing.add(r.toLowerCase()); } });
+  inputEl.value = '';
+  scheduleSave({ [key]: next }); renderConfig();
+}
+
+$('#friendInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addItems(e.target, 'friends_to_tag', '@'); } });
+$('#friendAdd').onclick = () => addItems($('#friendInput'), 'friends_to_tag', '@');
+$('#tagInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addItems(e.target, 'hashtags', '#'); } });
+$('#tagAdd').onclick = () => addItems($('#tagInput'), 'hashtags', '#');
+$('#quotaRange').oninput = e => { $('#quotaNum').value = e.target.value; scheduleSave({ daily_quota: +e.target.value }); };
+$('#quotaNum').onchange = e => { const v = Math.max(1, Math.min(200, +e.target.value || 1)); e.target.value = v; scheduleSave({ daily_quota: v }); renderConfig(); };
+$('#pphRange').oninput = e => { $('#pphVal').textContent = e.target.value; scheduleSave({ posts_per_hashtag: +e.target.value }); };
+$('#dryRun').onclick = () => {
+  const next = !config.dry_run;
+  if (!next && !confirm('Désactiver le Dry-Run ? Le bot likera, suivra et commentera réellement sur Instagram.')) return;
+  setSwitch($('#dryRun'), next); scheduleSave({ dry_run: next });
+};
+$('#headless').onclick = () => { const next = !config.headless; setSwitch($('#headless'), next); scheduleSave({ headless: next }); };
+
+// ---------------- Connexion ----------------
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => {
+  document.querySelectorAll('.tab').forEach(x => x.setAttribute('aria-selected', x === t ? 'true' : 'false'));
+  document.querySelectorAll('[data-panel]').forEach(p => p.classList.toggle('hidden', p.dataset.panel !== t.dataset.tab));
+});
+
+function loginMsg(text, kind = 'info') {
+  const el = $('#loginMsg');
+  if (!text) { el.classList.add('hidden'); return; }
+  el.className = 'mt-3 text-xs ' + ({ error: 'text-red-400', ok: 'text-green-400', warn: 'text-amber-300', info: 'text-mute' }[kind]);
+  el.textContent = text;
+}
+
+$('#loginForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const btn = $('#loginBtn'); btn.disabled = true; btn.textContent = 'Connexion en cours…';
+  loginMsg('Chromium se connecte à Instagram, cela peut prendre ~30 s.', 'info');
+  try {
+    const r = await api('/api/login', { method: 'POST', body: JSON.stringify({ username: $('#igUser').value, password: $('#igPass').value, remember: $('#igRemember').checked }) });
+    handleLoginResult(r);
+    $('#igPass').value = '';
+    loadConfig();
+  } catch (err) { loginMsg(err.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = 'Se connecter'; refreshStatus(); }
+};
+
+function handleLoginResult(r) {
+  if (r.status === 'ok') { loginMsg('Connecté ✓ Session sauvegardée.', 'ok'); $('#twofaForm').classList.add('hidden'); }
+  else if (r.status === '2fa_required') { loginMsg(r.message || 'Code 2FA requis.', 'warn'); $('#twofaForm').classList.remove('hidden'); $('#twofaCode').focus(); }
+  else if (r.status === 'manual') loginMsg(r.message, 'info');
+  else { loginMsg(r.message || 'Échec de la connexion.', 'error'); $('#twofaForm').classList.add('hidden'); }
+}
+
+$('#twofaForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const btn = $('#twofaBtn'); btn.disabled = true;
+  try { handleLoginResult(await api('/api/login/2fa', { method: 'POST', body: JSON.stringify({ code: $('#twofaCode').value }) })); $('#twofaCode').value = ''; }
+  catch (err) { loginMsg(err.message, 'error'); }
+  finally { btn.disabled = false; refreshStatus(); }
+};
+
+$('#manualBtn').onclick = async () => {
+  try { handleLoginResult(await api('/api/login/manual', { method: 'POST' })); }
+  catch (err) { loginMsg(err.message, 'error'); }
+  refreshStatus();
+};
+$('#checkBtn').onclick = async () => { $('#checkBtn').disabled = true; try { await api('/api/session/check', { method: 'POST' }); } catch (e) { loginMsg(e.message, 'error'); } $('#checkBtn').disabled = false; refreshStatus(); };
+$('#logoutBtn').onclick = async () => {
+  if (!confirm('Supprimer la session Instagram locale (./ig_session) ?')) return;
+  try { await api('/api/logout', { method: 'POST' }); loginMsg('Session supprimée.', 'warn'); } catch (e) { loginMsg(e.message, 'error'); }
+  refreshStatus(); loadConfig();
+};
+
+// ---------------- Statut ----------------
+function pill(el, color, text, pulse = false) {
+  el.innerHTML = `<span class="dot ${color} ${pulse ? 'pulse' : ''}"></span><span>${esc(text)}</span>`;
+}
+
+async function refreshStatus() {
+  let s; try { s = await api('/api/status'); } catch { return; }
+  const sess = s.session;
+  const connected = sess.connected;
+  const sessText = connected === true ? 'Connecté' : connected === false ? 'Non connecté' : 'Inconnu';
+  pill($('#hdrSession'), connected ? 'bg-green-500' : connected === false ? 'bg-red-500' : 'bg-neutral-600', sessText);
+  const badge = $('#sessionBadge');
+  badge.textContent = sess.state === '2fa_required' ? '2FA en attente' : sess.state === 'manual' ? 'Connexion manuelle…' : sess.state === 'logging_in' ? 'Connexion…' : sessText;
+  badge.className = 'text-xs rounded-full px-2.5 py-1 border ' + (connected ? 'border-green-900 text-green-400 bg-green-950/30' : connected === false ? 'border-red-900/70 text-red-400 bg-red-950/30' : 'border-line text-mute');
+  $('#sessionChecked').textContent = sess.checked_at ? `Vérifiée à ${sess.checked_at}` : 'Non vérifiée';
+  if (sess.state === '2fa_required') $('#twofaForm').classList.remove('hidden');
+  else if (sess.state === 'idle') $('#twofaForm').classList.add('hidden');
+
+  const running = s.bot.running;
+  pill($('#hdrBot'), running ? 'bg-green-500' : 'bg-neutral-600', running ? 'Bot actif' : "Bot à l'arrêt", running);
+  const mode = $('#hdrMode');
+  mode.textContent = s.dry_run ? 'DRY-RUN' : 'MODE RÉEL';
+  mode.className = 'inline-flex items-center rounded-full border px-3 py-1.5 font-medium ' + (s.dry_run ? 'border-line bg-card text-neutral-300' : 'border-red-900 bg-red-950/40 text-red-300');
+  $('#activity').textContent = s.bot.activity;
+  $('#startBtn').disabled = running || s.browser_busy;
+  $('#stopBtn').disabled = !running;
+  $('#manualBtn').disabled = s.browser_busy;
+  $('#loginBtn').disabled = running || s.browser_busy;
+  $('#todayCount').textContent = s.today;
+  $('#quotaShow').textContent = s.quota;
+  $('#todayUnit').textContent = s.dry_run ? 'simulations' : 'participations';
+  $('#todayBar').style.width = Math.min(100, (s.today / Math.max(1, s.quota)) * 100) + '%';
+  $('#todayReal').textContent = s.today_real;
+  $('#todaySim').textContent = s.today_simulated;
+  $('#browserState').textContent = s.browser_busy ? s.browser_owner : 'libre';
+  const be = $('#botError');
+  be.classList.toggle('hidden', !s.bot.last_error || running);
+  be.textContent = s.bot.last_error ? 'Dernier arrêt : ' + s.bot.last_error : '';
+  $('#apiKeyWarn').classList.toggle('hidden', s.api_key);
+}
+
+$('#startBtn').onclick = async () => {
+  if (!config.dry_run && !confirm('Mode RÉEL actif : le bot va réellement interagir avec Instagram. Continuer ?')) return;
+  try { await api('/api/bot/start', { method: 'POST' }); } catch (e) { addLog({ ts: now(), level: 'error', message: e.message }); }
+  refreshStatus();
+};
+$('#stopBtn').onclick = async () => { $('#stopBtn').disabled = true; try { await api('/api/bot/stop', { method: 'POST' }); } catch (e) {} refreshStatus(); };
+
+// ---------------- Logs ----------------
+const LEVEL = {
+  info: 'text-neutral-300', success: 'text-green-400', warning: 'text-amber-300', error: 'text-red-400',
+  ai: 'text-sky-300', action: 'text-white', debug: 'text-neutral-500',
+};
+const TAG = { info: 'INFO', success: ' OK ', warning: 'WARN', error: 'ERR ', ai: ' IA ', action: 'ACT ', debug: 'WAIT' };
+const now = () => new Date().toTimeString().slice(0, 8);
+
+function addLog(e) {
+  const c = $('#console');
+  const line = document.createElement('div');
+  line.className = 'flex gap-3 ' + (LEVEL[e.level] || LEVEL.info);
+  line.innerHTML = `<span class="text-neutral-600 shrink-0">${esc(e.ts)}</span><span class="shrink-0 text-neutral-500">${TAG[e.level] || 'INFO'}</span><span class="whitespace-pre-wrap break-words min-w-0">${esc(e.message)}</span>`;
+  c.appendChild(line);
+  while (c.children.length > 800) c.removeChild(c.firstChild);
+  if ($('#autoscroll').checked) c.scrollTop = c.scrollHeight;
+}
+$('#clearLogs').onclick = () => { $('#console').innerHTML = ''; };
+
+let statusDebounce = null, histDebounce = null;
+function connectWS() {
+  const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws/logs');
+  ws.onopen = () => { $('#wsState').className = 'dot bg-green-500'; $('#console').innerHTML = ''; };
+  ws.onclose = () => { $('#wsState').className = 'dot bg-red-500'; setTimeout(connectWS, 2000); };
+  ws.onmessage = (m) => {
+    const e = JSON.parse(m.data);
+    if (e.type === 'log') addLog(e);
+    else if (e.type === 'refresh') {
+      if (e.what === 'history') { clearTimeout(histDebounce); histDebounce = setTimeout(loadHistory, 300); }
+      clearTimeout(statusDebounce); statusDebounce = setTimeout(refreshStatus, 200);
+    }
+  };
+}
+
+// ---------------- Historique ----------------
+const STATUS_STYLE = {
+  'Participé': 'bg-green-950/50 text-green-400 border-green-900',
+  'Simulé': 'bg-sky-950/40 text-sky-300 border-sky-900/70',
+  'Ignoré': 'bg-neutral-900 text-neutral-400 border-line',
+  'Erreur': 'bg-red-950/40 text-red-400 border-red-900/70',
+};
+let historyRows = [];
+async function loadHistory() {
+  try { historyRows = await api('/api/history'); } catch { return; }
+  renderHistory();
+}
+function renderHistory() {
+  const f = $('#histFilter').value;
+  const rows = f ? historyRows.filter(r => r.status === f) : historyRows;
+  $('#histCount').textContent = `${rows.length} entrée${rows.length > 1 ? 's' : ''}`;
+  $('#histEmpty').classList.toggle('hidden', rows.length > 0);
+  $('#histBody').innerHTML = rows.map(r => {
+    const short = r.url.replace('https://www.instagram.com', '');
+    const d = r.created_at.replace('T', ' ').slice(5, 16);
+    return `<tr class="border-b border-line/70 hover:bg-soft/60 align-top">
+      <td class="px-5 py-2.5 font-mono text-xs text-mute whitespace-nowrap">${esc(d)}</td>
+      <td class="px-3 py-2.5 whitespace-nowrap">${r.account ? `<a class="hover:underline" href="https://www.instagram.com/${encodeURIComponent(r.account)}/" target="_blank" rel="noopener">@${esc(r.account)}</a>` : '<span class="text-mute">—</span>'}</td>
+      <td class="px-3 py-2.5 whitespace-nowrap"><a class="font-mono text-xs text-neutral-300 hover:text-white underline decoration-neutral-700 underline-offset-2" href="${esc(r.url)}" target="_blank" rel="noopener">${esc(short)}</a>${r.hashtag ? `<div class="text-[11px] text-mute mt-0.5">#${esc(r.hashtag)}</div>` : ''}</td>
+      <td class="px-3 py-2.5"><span class="inline-block text-xs rounded-full border px-2 py-0.5 whitespace-nowrap ${STATUS_STYLE[r.status] || STATUS_STYLE['Ignoré']}">${esc(r.status)}</span></td>
+      <td class="px-3 py-2.5 text-xs text-neutral-300 min-w-[260px] max-w-[460px]">${esc(r.reason)}</td>
+      <td class="px-5 py-2.5 text-xs text-neutral-400 font-mono min-w-[140px]">${esc(r.comment || '')}</td>
+    </tr>`;
+  }).join('');
+}
+$('#histFilter').onchange = renderHistory;
+$('#histClear').onclick = async () => {
+  if (!confirm("Vider tout l'historique ? Les posts déjà traités pourront être re-analysés.")) return;
+  try { await api('/api/history', { method: 'DELETE' }); } catch (e) { alert(e.message); }
+  loadHistory();
+};
+
+// ---------------- Init ----------------
+async function loadConfig() { try { config = { ...config, ...(await api('/api/config')) }; renderConfig(); } catch {} }
+loadConfig(); refreshStatus(); loadHistory(); connectWS();
+setInterval(refreshStatus, 5000);
+</script>
+</body>
+</html>

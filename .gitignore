@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+ig_session/
+giveaways.db
+giveaways.db-*
+*.log
