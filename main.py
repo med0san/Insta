@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 import db
 import instagram as ig
 from auth import auth
+from analyzer import ollama_status
 from bot import bot
 from logbus import bus
 
@@ -46,6 +47,10 @@ class ConfigIn(BaseModel):
     dry_run: bool | None = None
     headless: bool | None = None
     posts_per_hashtag: int | None = Field(default=None, ge=1, le=50)
+    analyzer_mode: Literal["rules", "ollama"] | None = None
+    ollama_model: str | None = Field(default=None, max_length=100)
+    ollama_url: str | None = Field(default=None, max_length=200)
+    default_answer: str | None = Field(default=None, max_length=200)
 
 
 class LoginIn(BaseModel):
@@ -113,6 +118,14 @@ async def put_config(body: ConfigIn):
     cfg = await db.set_config(values)
     bus.notify("status")
     return _public_config(cfg)
+
+
+@app.get("/api/analyzer/status")
+async def analyzer_status():
+    cfg = await db.get_config()
+    if cfg["analyzer_mode"] != "ollama":
+        return {"ok": True, "message": "Analyse par règles (gratuite, hors ligne)."}
+    return await asyncio.to_thread(ollama_status, cfg["ollama_url"], cfg["ollama_model"])
 
 
 @app.post("/api/session/check")

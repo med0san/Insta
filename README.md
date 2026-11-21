@@ -4,7 +4,7 @@ Application web locale (FastAPI + Playwright + SQLite) pour scanner des hashtags
 actifs et y participer (like, follow, commentaire avec identification d'amis).
 
 **100 % gratuit : aucune clé API, aucun crédit.** L'analyse des légendes est faite en local par des règles
-(mots-clés FR/EN, dates de fin, @mentions…), sans service externe.
+(mots-clés FR/EN, dates de fin, @mentions, questions…), sans service externe ; un modèle local Ollama est optionnel.
 
 > ⚠️ L'automatisation d'un compte va à l'encontre des conditions d'utilisation d'Instagram et peut entraîner
 > des restrictions ou une suspension du compte. Le mode **Dry-Run** est activé par défaut : commencez par là.
@@ -61,10 +61,37 @@ python3 -m venv .venv
 - Les sélecteurs Instagram (boutons, champ de commentaire) peuvent changer : en cas d'erreur, désactivez
   « Navigateur invisible » pour observer ce que fait Chromium.
 
-## Limites de l'analyse par règles
+## Lecture des conditions
 
-L'analyseur est moins fin qu'un modèle de langage : il reconnaît les formulations courantes
-(« jusqu'au 30/11 », « identifie 2 amis », « commente le mot « SOLEIL » », « gagnante : @… ») mais peut
-rater une formulation inhabituelle ou ne pas répondre à une question posée en commentaire.
-Les concours ambigus sont ignorés plutôt que traités à tort ; la raison est visible dans l'historique.
-Les règles se trouvent dans `analyzer.py` et s'ajustent facilement.
+Pour chaque post, le bot lit **toute la légende** et en déduit la liste exacte de ce qu'il faut faire
+(visible dans les logs, ligne « • … », et dans la colonne *Raison* de l'historique) :
+
+- comptes à suivre (y compris « compte de secours » / partenaires), liker, **enregistrer** le post ;
+- nombre d'amis à identifier (tirés au hasard dans votre liste) ;
+- mot-clé imposé (« commente le mot « SOLEIL » ») ;
+- **question à laquelle répondre** (« dis-moi quel cadeau te fait envie ») : la réponse est ajoutée au commentaire ;
+- date de fin / gagnants déjà annoncés → concours ignoré ;
+- conditions **impossibles pour le bot** (partage en story obligatoire, message privé, abonnement TikTok/YouTube,
+  achat) → concours ignoré avec la raison. Les actions présentées comme *bonus* sont ignorées sans bloquer.
+
+Deux modes (réglage « Lecture des conditions ») :
+
+| Mode | Coût | Plus |
+|---|---|---|
+| **Règles intégrées** (défaut) | gratuit, hors ligne | rapide ; les questions reçoivent la *réponse par défaut* configurée |
+| **Ollama** (optionnel) | gratuit, local | un modèle lit aussi l'**image** du post (noms des lots…) et rédige une réponse adaptée |
+
+Activer Ollama : installez [Ollama](https://ollama.com), lancez `ollama pull gemma3:4b`, choisissez
+« Modèle local Ollama » dans l'interface et cliquez **Tester**. Si Ollama est éteint, le bot retombe
+automatiquement sur les règles. Les pseudos inventés par le modèle sont filtrés (seuls ceux présents dans la légende sont gardés).
+
+## Passer en mode réel
+
+Le **Dry-Run** est activé par défaut. Désactivez-le avec l'interrupteur (une confirmation est demandée) pour
+que le bot like, enregistre, suive et commente réellement. Commencez avec un quota bas.
+
+## Limites
+
+Les règles reconnaissent les formulations courantes mais peuvent rater une tournure inhabituelle ; en cas de
+doute le concours est ignoré plutôt que traité à tort. Les sélecteurs Instagram peuvent changer.
+Les règles se trouvent dans `analyzer.py`.

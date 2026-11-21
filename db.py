@@ -18,6 +18,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "dry_run": True,
     "headless": True,          # navigateur invisible pendant que le bot tourne
     "posts_per_hashtag": 12,   # nombre max de posts examinés par hashtag et par cycle
+    "analyzer_mode": "rules",  # "rules" (gratuit, hors ligne) ou "ollama" (modèle local gratuit)
+    "ollama_model": "gemma3:4b",
+    "ollama_url": "http://localhost:11434",
+    "default_answer": "Le premier cadeau me fait trop envie 😍",  # réponse aux questions posées en commentaire
     "ig_username": "",
     "ig_password": "",         # stocké en clair, uniquement si l'utilisateur coche "Mémoriser"
 }

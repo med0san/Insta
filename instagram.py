@@ -352,17 +352,7 @@ async def read_post(page: Page, url: str) -> dict[str, Any]:
         m = re.search(r':\s*["“](.*)["”]\s*\.?\s*$', og_desc, re.S)
         caption = (m.group(1) if m else og_desc).strip()
 
-    author = None
-    m = AUTHOR_RE.search(og_desc)
-    if m:
-        author = m.group(1)
-    if not author:
-        try:
-            href = await page.locator("header a[href^='/']").first.get_attribute("href", timeout=2000)
-            if href:
-                author = href.strip("/").split("/")[0] or None
-        except Exception:
-            pass
+    author = await _find_author(page, og_desc)
 
     post_date = None
     try:
@@ -370,7 +360,77 @@ async def read_post(page: Page, url: str) -> dict[str, Any]:
     except Exception:
         pass
 
-    return {"caption": caption, "author": author, "post_date": post_date}
+    image_url = None
+    try:
+        image_url = await page.get_attribute('meta[property="og:image"]', "content", timeout=1500)
+    except Exception:
+        pass
+    if not image_url:
+        try:
+            image_url = await page.evaluate(
+                """() => {
+                    const imgs = [...document.querySelectorAll('article img, main img')]
+                      .filter(i => i.naturalWidth >= 400 && /^https?:/.test(i.src));
+                    return imgs.length ? imgs[0].src : null;
+                }"""
+            )
+        except Exception:
+            pass
+
+    return {"caption": caption, "author": author, "post_date": post_date, "image_url": image_url}
+
+
+HANDLE_RE = re.compile(r"^[A-Za-z0-9._]{1,30}$")
+RESERVED_PATHS = {
+    "explore", "reels", "reel", "p", "direct", "accounts", "stories", "about", "legal", "privacy",
+    "directory", "web", "api", "challenge", "emails", "session", "tv", "nametag", "download", "void",
+}
+
+
+async def _find_author(page: Page, og_desc: str) -> str | None:
+    """Pseudo de l'auteur du post : plusieurs stratégies car le DOM d'Instagram change souvent."""
+    m = AUTHOR_RE.search(og_desc)
+    if m and HANDLE_RE.match(m.group(1)):
+        return m.group(1)
+    # <title> / og:title : « pseudo on Instagram: … » (n'est un pseudo valide que sans espace)
+    for getter in (page.title, lambda: page.get_attribute('meta[property="og:title"]', "content", timeout=1500)):
+        try:
+            title = await getter() or ""
+        except Exception:
+            continue
+        t = re.match(r"^\(?\d*\)?\s*(?:.*?\(@([A-Za-z0-9._]{1,30})\)|([A-Za-z0-9._]{1,30})\s+(?:on|sur) Instagram)", title)
+        if t:
+            return t.group(1) or t.group(2)
+    # 1er lien de profil dans la zone du post
+    try:
+        hrefs = await page.eval_on_selector_all(
+            "article a[href^='/'], main a[href^='/'], header a[href^='/']",
+            "els => els.map(e => e.getAttribute('href'))",
+        )
+    except Exception:
+        hrefs = []
+    for h in hrefs:
+        parts = [x for x in (h or "").split("?")[0].strip("/").split("/") if x]
+        if len(parts) == 1 and parts[0].lower() not in RESERVED_PATHS and HANDLE_RE.match(parts[0]):
+            return parts[0]
+    return None
+
+
+async def fetch_image_b64(page: Page, image_url: str | None) -> str | None:
+    """Télécharge l'image du post (pour un modèle vision local). Renvoie du base64 ou None."""
+    if not image_url:
+        return None
+    try:
+        resp = await page.context.request.get(image_url, timeout=15000)
+        if not resp.ok:
+            return None
+        body = await resp.body()
+        if len(body) > 6_000_000:
+            return None
+        import base64
+        return base64.b64encode(body).decode("ascii")
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -394,6 +454,27 @@ async def like_post(page: Page) -> str:
     await asyncio.sleep(2)
     await check_blocked(page)
     return "liké"
+
+
+SAVE_SEL = 'svg[aria-label="Save"], svg[aria-label="Enregistrer"]'
+UNSAVE_SEL = (
+    'svg[aria-label="Remove"], svg[aria-label="Retirer"], svg[aria-label="Supprimer"], '
+    'svg[aria-label="Unsave"], svg[aria-label="Ne plus enregistrer"]'
+)
+
+
+async def save_post(page: Page) -> str:
+    try:
+        if await page.locator(UNSAVE_SEL).first.is_visible(timeout=1200):
+            return "déjà enregistré"
+    except Exception:
+        pass
+    btn = page.locator(SAVE_SEL).first
+    await btn.wait_for(state="visible", timeout=8000)
+    await btn.click()
+    await asyncio.sleep(2)
+    await check_blocked(page)
+    return "enregistré"
 
 
 async def follow_account(page: Page, account: str) -> str:

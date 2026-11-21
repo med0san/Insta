@@ -181,6 +181,28 @@
               <input id="pphRange" type="range" min="1" max="50" class="mt-3 w-full" />
             </div>
 
+            <div class="space-y-3 rounded-[10px] border border-line bg-bg p-3.5">
+              <div>
+                <label class="label" for="analyzerMode">Lecture des conditions</label>
+                <select id="analyzerMode" class="input mt-1.5">
+                  <option value="rules">Règles intégrées (gratuit, hors ligne)</option>
+                  <option value="ollama">Modèle local Ollama (gratuit, lit aussi l'image)</option>
+                </select>
+              </div>
+              <div id="ollamaBox" class="hidden space-y-2">
+                <div class="flex gap-2">
+                  <input id="ollamaModel" class="input font-mono" placeholder="gemma3:4b" />
+                  <button id="ollamaTest" class="btn btn-ghost">Tester</button>
+                </div>
+                <p id="ollamaHint" class="text-xs text-mute">Installez Ollama (ollama.com) puis : <code class="font-mono text-neutral-300">ollama pull gemma3:4b</code></p>
+              </div>
+              <div>
+                <label class="label" for="defaultAnswer">Réponse par défaut aux questions en commentaire</label>
+                <input id="defaultAnswer" class="input mt-1.5" placeholder="Le premier cadeau me fait trop envie 😍" />
+                <p class="mt-1.5 text-xs text-mute">Utilisée quand un concours demande « dis-moi quel cadeau… » et que le modèle local n'est pas actif.</p>
+              </div>
+            </div>
+
             <div class="flex items-center justify-between gap-4 rounded-[10px] border border-line bg-bg px-3.5 py-3">
               <div>
                 <p class="text-sm font-medium text-white">Mode Dry-Run (simulation)</p>
@@ -308,8 +330,8 @@ function scheduleSave(patch) {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     try {
-      const { friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag } = config;
-      const saved = await api('/api/config', { method: 'PUT', body: JSON.stringify({ friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag }) });
+      const { friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag, analyzer_mode, ollama_model, default_answer } = config;
+      const saved = await api('/api/config', { method: 'PUT', body: JSON.stringify({ friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag, analyzer_mode, ollama_model, default_answer }) });
       config = { ...config, ...saved };
       renderConfig();
       $('#saveState').textContent = 'Enregistré ✓';
@@ -341,6 +363,10 @@ function renderConfig() {
   if (document.activeElement !== $('#quotaNum')) $('#quotaNum').value = config.daily_quota;
   $('#pphRange').value = config.posts_per_hashtag; $('#pphVal').textContent = config.posts_per_hashtag;
   setSwitch($('#dryRun'), config.dry_run);
+  $('#analyzerMode').value = config.analyzer_mode || 'rules';
+  $('#ollamaBox').classList.toggle('hidden', config.analyzer_mode !== 'ollama');
+  if (document.activeElement !== $('#ollamaModel')) $('#ollamaModel').value = config.ollama_model || '';
+  if (document.activeElement !== $('#defaultAnswer')) $('#defaultAnswer').value = config.default_answer || '';
   setSwitch($('#headless'), config.headless);
   if (config.ig_username && !$('#igUser').value) $('#igUser').value = config.ig_username;
   $('#savedPassHint').classList.toggle('hidden', !config.has_saved_password);
@@ -364,6 +390,15 @@ $('#tagAdd').onclick = () => addItems($('#tagInput'), 'hashtags', '#');
 $('#quotaRange').oninput = e => { $('#quotaNum').value = e.target.value; scheduleSave({ daily_quota: +e.target.value }); };
 $('#quotaNum').onchange = e => { const v = Math.max(1, Math.min(200, +e.target.value || 1)); e.target.value = v; scheduleSave({ daily_quota: v }); renderConfig(); };
 $('#pphRange').oninput = e => { $('#pphVal').textContent = e.target.value; scheduleSave({ posts_per_hashtag: +e.target.value }); };
+$('#analyzerMode').onchange = e => { scheduleSave({ analyzer_mode: e.target.value }); renderConfig(); };
+$('#ollamaModel').oninput = e => scheduleSave({ ollama_model: e.target.value.trim() });
+$('#defaultAnswer').oninput = e => scheduleSave({ default_answer: e.target.value });
+$('#ollamaTest').onclick = async () => {
+  const hint = $('#ollamaHint'); hint.textContent = 'Test en cours…'; hint.className = 'text-xs text-mute';
+  await new Promise(r => setTimeout(r, 600));
+  try { const r = await api('/api/analyzer/status'); hint.textContent = r.message; hint.className = 'text-xs ' + (r.ok ? 'text-green-400' : 'text-amber-300'); }
+  catch (e) { hint.textContent = e.message; hint.className = 'text-xs text-red-400'; }
+};
 $('#dryRun').onclick = () => {
   const next = !config.dry_run;
   if (!next && !confirm('Désactiver le Dry-Run ? Le bot likera, suivra et commentera réellement sur Instagram.')) return;

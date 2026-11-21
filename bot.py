@@ -14,6 +14,7 @@ from logbus import bus
 ACTION_DELAY = (3.0, 9.0)        # entre deux actions
 GIVEAWAY_DELAY = (45.0, 120.0)   # entre deux concours
 CYCLE_PAUSE = (900.0, 1800.0)    # après avoir parcouru tous les hashtags
+GENERIC_COMMENT = "Je participe ! 🍀"  # si le concours exige un commentaire sans autre précision
 
 
 class StopBot(Exception):
@@ -176,23 +177,34 @@ class Bot:
             return False
 
         self._set_activity(f"Analyse @{author or '?'}")
-        bus.log(f"🔍 Analyse de la légende de @{author or '?'}…", "ai")
+        bus.log(f"🔍 Lecture des conditions du post de @{author or '?'} ({url})…", "ai")
+        image_b64 = None
+        if cfg.get("analyzer_mode") == "ollama":
+            image_b64 = await ig.fetch_image_b64(page, post.get("image_url"))
+            bus.log("Image du post analysée par le modèle local." if image_b64 else "Image indisponible : légende seule.", "debug")
         try:
-            result = await analyze_caption(post["caption"], author, post["post_date"])
+            result = await analyze_caption(post["caption"], author, post["post_date"], image_b64, cfg)
         except AnalyzerError as e:
             await db.add_history(url, author, tag, "Erreur", str(e))
             bus.notify("history")
             raise
         bus.log(
-            f"Analyse → giveaway={result['is_giveaway']} actif={result['is_active']} "
-            f"suivre={result['accounts_to_follow']} amis={result['friends_count']} "
-            f"mot-clé={result['custom_keyword']!r} — {result['reason']}",
+            f"Analyse → giveaway={result['is_giveaway']} actif={result['is_active']} — {result['reason']}",
             "ai",
         )
+        for cond in result.get("conditions", []):
+            bus.log(f"   • {cond}", "ai")
 
         if not (result["is_giveaway"] and result["is_active"]):
             await db.add_history(url, author, tag, "Ignoré", result["reason"])
             bus.log(f"Décision : ignoré ({url})", "info")
+            bus.notify("history")
+            return False
+
+        if result.get("unsupported"):
+            reason = "Condition(s) impossible(s) pour le bot : " + " ; ".join(result["unsupported"]) + "."
+            await db.add_history(url, author, tag, "Ignoré", reason)
+            bus.log(f"Décision : ignoré — {reason}", "warning")
             bus.notify("history")
             return False
 
@@ -208,14 +220,29 @@ class Bot:
             bus.notify("history")
             return False
 
+        answer = result.get("answer")
+        if result.get("question") and not answer:
+            answer = (cfg.get("default_answer") or "").strip() or None
+            if not answer:
+                reason = "Une question demande une réponse personnalisée et aucune réponse par défaut n'est configurée."
+                await db.add_history(url, author, tag, "Ignoré", reason)
+                bus.log(f"Décision : ignoré — {reason}", "warning")
+                bus.notify("history")
+                return False
+            bus.log(f"Question détectée, réponse par défaut utilisée : « {answer} »", "debug")
+
         tagged = random.sample(friends_pool, needed) if needed else []
-        parts = [result["custom_keyword"]] if result["custom_keyword"] else []
-        parts += [f"@{f}" for f in tagged]
+        parts = [p for p in (result["custom_keyword"], answer) if p] + [f"@{f}" for f in tagged]
+        if not parts and result.get("needs_comment"):
+            parts = [GENERIC_COMMENT]
         comment = " ".join(parts) if parts else None
         follows = result["accounts_to_follow"]
+        save = bool(result.get("needs_save"))
 
         if cfg["dry_run"]:
             bus.log(f"🧪 [DRY-RUN] Aurait liké : {url}", "action")
+            if save:
+                bus.log("🧪 [DRY-RUN] Aurait enregistré le post", "action")
             for acc in follows:
                 bus.log(f"🧪 [DRY-RUN] Aurait suivi : @{acc}", "action")
             if comment:
@@ -231,13 +258,17 @@ class Bot:
             r = await ig.like_post(page)
             bus.log(f"❤️ Post {r} : {url}", "action")
             await self._sleep(*ACTION_DELAY)
+            if save:
+                r = await ig.save_post(page)
+                bus.log(f"🔖 Post {r}", "action")
+                await self._sleep(*ACTION_DELAY)
             for acc in follows:
                 self._check_stop()
                 r = await ig.follow_account(page, acc)
                 bus.log(f"➕ @{acc} : {r}", "action")
                 await self._sleep(*ACTION_DELAY)
             if comment:
-                r = await ig.post_comment(page, url, comment)
+                await ig.post_comment(page, url, comment)
                 bus.log(f"💬 Commentaire publié : « {comment} »", "action")
         except (ig.InstagramBlocked, ig.SessionExpired):
             await db.add_history(url, author, tag, "Erreur", "Action bloquée par Instagram.", comment)
@@ -258,6 +289,5 @@ class Bot:
         bus.notify("history")
         bus.notify("status")
         return True
-
 
 bot = Bot()
