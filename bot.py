@@ -111,7 +111,7 @@ class Bot:
             bus.log(f"{e} Arrêt du bot.", "error")
         except AnalyzerError as e:
             self.last_error = str(e)
-            bus.log(f"Erreur d'analyse IA : {e}. Arrêt du bot.", "error")
+            bus.log(f"Erreur d'analyse : {e}. Arrêt du bot.", "error")
         except Exception as e:  # noqa: BLE001
             self.last_error = f"{type(e).__name__}: {e}"
             bus.log(f"Erreur inattendue : {self.last_error}. Arrêt du bot.", "error")
@@ -175,8 +175,8 @@ class Bot:
             bus.notify("history")
             return False
 
-        self._set_activity(f"Analyse IA @{author or '?'}")
-        bus.log(f"🤖 Analyse IA du post de @{author or '?'}…", "ai")
+        self._set_activity(f"Analyse @{author or '?'}")
+        bus.log(f"🔍 Analyse de la légende de @{author or '?'}…", "ai")
         try:
             result = await analyze_caption(post["caption"], author, post["post_date"])
         except AnalyzerError as e:
@@ -184,7 +184,7 @@ class Bot:
             bus.notify("history")
             raise
         bus.log(
-            f"IA → giveaway={result['is_giveaway']} actif={result['is_active']} "
+            f"Analyse → giveaway={result['is_giveaway']} actif={result['is_active']} "
             f"suivre={result['accounts_to_follow']} amis={result['friends_count']} "
             f"mot-clé={result['custom_keyword']!r} — {result['reason']}",
             "ai",

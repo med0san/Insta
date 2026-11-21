@@ -1,7 +1,10 @@
 # Giveaway Bot — participation automatique aux concours Instagram
 
-Application web locale (FastAPI + Playwright + Claude Haiku + SQLite) pour scanner des hashtags,
-détecter les concours actifs avec l'IA et y participer (like, follow, commentaire avec identification d'amis).
+Application web locale (FastAPI + Playwright + SQLite) pour scanner des hashtags, détecter les concours
+actifs et y participer (like, follow, commentaire avec identification d'amis).
+
+**100 % gratuit : aucune clé API, aucun crédit.** L'analyse des légendes est faite en local par des règles
+(mots-clés FR/EN, dates de fin, @mentions…), sans service externe.
 
 > ⚠️ L'automatisation d'un compte va à l'encontre des conditions d'utilisation d'Instagram et peut entraîner
 > des restrictions ou une suspension du compte. Le mode **Dry-Run** est activé par défaut : commencez par là.
@@ -9,8 +12,7 @@ détecter les concours actifs avec l'IA et y participer (like, follow, commentai
 ## Lancement
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...     # Windows : set ANTHROPIC_API_KEY=...
-./run.sh                                # Windows : run.bat
+./run.sh        # Windows : run.bat
 ```
 
 Puis ouvrez **http://localhost:8000**.
@@ -43,8 +45,8 @@ python3 -m venv .venv
 | Fichier | Rôle |
 |---|---|
 | `main.py` | Serveur FastAPI : API REST, WebSocket `/ws/logs`, frontend |
-| `bot.py` | Boucle asyncio : scan des hashtags → analyse IA → participation ou simulation |
-| `analyzer.py` | Appel à `claude-haiku-4-5` avec sortie JSON stricte (schéma imposé) |
+| `bot.py` | Boucle asyncio : scan des hashtags → analyse → participation ou simulation |
+| `analyzer.py` | Analyse locale par règles → `{is_giveaway, is_active, accounts_to_follow, friends_count, custom_keyword, reason}` |
 | `instagram.py` | Navigateur Playwright persistant + actions (lecture, like, follow, commentaire) |
 | `auth.py` | Connexion par identifiants/2FA ou manuelle |
 | `db.py` | SQLite (`giveaways.db`) : config + historique |
@@ -58,3 +60,11 @@ python3 -m venv .venv
 - Si un concours demande plus d'amis que ceux configurés, il est ignoré.
 - Les sélecteurs Instagram (boutons, champ de commentaire) peuvent changer : en cas d'erreur, désactivez
   « Navigateur invisible » pour observer ce que fait Chromium.
+
+## Limites de l'analyse par règles
+
+L'analyseur est moins fin qu'un modèle de langage : il reconnaît les formulations courantes
+(« jusqu'au 30/11 », « identifie 2 amis », « commente le mot « SOLEIL » », « gagnante : @… ») mais peut
+rater une formulation inhabituelle ou ne pas répondre à une question posée en commentaire.
+Les concours ambigus sont ignorés plutôt que traités à tort ; la raison est visible dans l'historique.
+Les règles se trouvent dans `analyzer.py` et s'ajustent facilement.

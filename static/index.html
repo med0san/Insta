@@ -78,9 +78,6 @@
   </header>
 
   <main class="mx-auto max-w-7xl px-4 sm:px-6 py-6 space-y-6">
-    <div id="apiKeyWarn" class="hidden rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
-      <code class="font-mono">ANTHROPIC_API_KEY</code> n'est pas défini dans l'environnement du serveur : l'analyse IA des légendes échouera. Exportez la variable puis relancez le serveur.
-    </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
       <!-- Colonne gauche -->
@@ -278,7 +275,7 @@
               <th class="px-3 py-2.5 font-medium">Compte</th>
               <th class="px-3 py-2.5 font-medium">Post</th>
               <th class="px-3 py-2.5 font-medium">Statut</th>
-              <th class="px-3 py-2.5 font-medium">Raison (IA)</th>
+              <th class="px-3 py-2.5 font-medium">Raison</th>
               <th class="px-5 py-2.5 font-medium">Commentaire</th>
             </tr>
           </thead>
@@ -465,7 +462,6 @@ async function refreshStatus() {
   const be = $('#botError');
   be.classList.toggle('hidden', !s.bot.last_error || running);
   be.textContent = s.bot.last_error ? 'Dernier arrêt : ' + s.bot.last_error : '';
-  $('#apiKeyWarn').classList.toggle('hidden', s.api_key);
 }
 
 $('#startBtn').onclick = async () => {

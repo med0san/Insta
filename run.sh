@@ -8,8 +8,5 @@ if [ ! -d .venv ]; then
   .venv/bin/pip install -r requirements.txt
   .venv/bin/playwright install chromium
 fi
-if [ -z "$ANTHROPIC_API_KEY" ]; then
-  echo "⚠  ANTHROPIC_API_KEY n'est pas défini : l'analyse IA échouera."
-fi
 echo "→ Ouvrez http://localhost:8000"
 exec .venv/bin/uvicorn main:app --host 127.0.0.1 --port 8000

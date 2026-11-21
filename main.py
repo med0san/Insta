@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -26,8 +25,6 @@ STATIC_DIR = BASE_DIR / "static"
 async def lifespan(app: FastAPI):
     await db.init_db()
     bus.log("Serveur démarré.", "success")
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        bus.log("ANTHROPIC_API_KEY absent : l'analyse IA échouera tant qu'il n'est pas défini.", "warning")
     asyncio.create_task(auth.refresh())
     yield
     if bot.running:
@@ -98,7 +95,6 @@ async def status():
         "dry_run": cfg["dry_run"],
         "browser_busy": ig.browser.busy,
         "browser_owner": ig.browser.owner,
-        "api_key": bool(os.environ.get("ANTHROPIC_API_KEY")),
     }
 
 
