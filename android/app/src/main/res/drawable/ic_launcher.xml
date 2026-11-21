@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="96dp" android:height="96dp"
+    android:viewportWidth="96" android:viewportHeight="96">
+    <!-- fond -->
+    <path android:fillColor="#141414"
+        android:pathData="M20,0 H76 A20,20 0 0 1 96,20 V76 A20,20 0 0 1 76,96 H20 A20,20 0 0 1 0,76 V20 A20,20 0 0 1 20,0 Z" />
+    <!-- boîte cadeau -->
+    <path android:strokeColor="#FAFAFA" android:strokeWidth="4" android:strokeLineJoin="round" android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M26,44 H70 V72 A3,3 0 0 1 67,75 H29 A3,3 0 0 1 26,72 Z M22,34 H74 V44 H22 Z M48,34 V75" />
+    <!-- nœud -->
+    <path android:strokeColor="#FAFAFA" android:strokeWidth="4" android:strokeLineJoin="round" android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M48,34 C40,34 33,30 33,25 C33,20 40,20 44,24 C46,26 48,30 48,34 C48,30 50,26 52,24 C56,20 63,20 63,25 C63,30 56,34 48,34" />
+</vector>

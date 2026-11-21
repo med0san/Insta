@@ -6,11 +6,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+import os
+
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+import access
 import db
 import instagram as ig
 from auth import auth
@@ -28,6 +31,9 @@ async def lifespan(app: FastAPI):
     await db.init_db()
     bus.log("Serveur démarré.", "success")
     asyncio.create_task(auth.refresh())
+    if access.REMOTE:
+        ip = access.lan_ip()
+        bus.log(f"Accès réseau activé (mot de passe requis). Sur le téléphone : http://{ip or '<ip-du-pc>'}:8000", "warning")
     cfg = await db.get_config()
     if cfg.get("bot_enabled"):       # le bot tournait avant l'arrêt / le plantage du serveur : on le relance
         asyncio.create_task(_resume_bot())
@@ -47,6 +53,41 @@ async def _resume_bot() -> None:
 
 app = FastAPI(title="Insta Giveaway Bot", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+OPEN_PATHS = ("/login", "/access/login")
+
+
+@app.middleware("http")
+async def require_password(request: Request, call_next):
+    """Si un mot de passe est défini, tout est protégé sauf la page de connexion."""
+    if access.enabled() and request.url.path not in OPEN_PATHS:
+        if not access.is_authed(request.cookies.get(access.COOKIE)):
+            if request.url.path.startswith("/api"):
+                return JSONResponse({"detail": "Authentification requise."}, status_code=401)
+            return HTMLResponse(access.LOGIN_HTML, status_code=401)
+    return await call_next(request)
+
+
+@app.get("/login")
+async def login_page():
+    return HTMLResponse(access.LOGIN_HTML)
+
+
+class AccessIn(BaseModel):
+    password: str = Field(max_length=200)
+
+
+@app.post("/access/login")
+async def access_login(body: AccessIn, request: Request):
+    ip = request.client.host if request.client else "?"
+    if access.locked(ip):
+        raise HTTPException(429, "Trop d'essais. Réessayez dans 15 minutes.")
+    token = access.check_password(body.password, ip)
+    if not token:
+        raise HTTPException(401, "Mot de passe incorrect.")
+    res = JSONResponse({"ok": True})
+    res.set_cookie(access.COOKIE, token, max_age=90 * 86400, httponly=True, samesite="lax")
+    return res
 
 
 # ---------------------------------------------------------------------------
@@ -263,6 +304,9 @@ async def history_clear():
 
 @app.websocket("/ws/logs")
 async def ws_logs(ws: WebSocket):
+    if access.enabled() and not access.is_authed(ws.cookies.get(access.COOKIE)):
+        await ws.close(code=1008)
+        return
     await ws.accept()
     queue = bus.subscribe()
     try:
@@ -280,4 +324,4 @@ async def ws_logs(ws: WebSocket):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="127.0.0.1", port=8000)
+    uvicorn.run("main:app", host=access.HOST, port=8000)

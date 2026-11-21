@@ -5,3 +5,9 @@ ig_session/
 giveaways.db
 giveaways.db-*
 *.log
+
+# Android
+android/local.properties
+android/.gradle/
+android/build/
+android/app/build/

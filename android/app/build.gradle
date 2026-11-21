@@ -1,0 +1,41 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.giveawaybot.remote'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.giveawaybot.remote'
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    // Clé de signature fixe (application personnelle installée hors Play Store) : les mises à jour
+    // s'installent par-dessus la version précédente sans désinstaller.
+    signingConfigs {
+        release {
+            storeFile file('giveawaybot.keystore')
+            storePassword 'giveawaybot'
+            keyAlias 'giveawaybot'
+            keyPassword 'giveawaybot'
+        }
+    }
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled false
+        }
+    }
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}

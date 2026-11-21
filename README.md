@@ -133,6 +133,28 @@ l'extrait de légende qui le prouve.
 Gardé volontairement : l'**arrêt immédiat** si Instagram affiche « Action bloquée » / « Try Again Later ».
 Continuer après un blocage fait passer le compte en restriction, voire en suspension.
 
+## Application Android (télécommande)
+
+**Le bot ne peut pas tourner sur le téléphone** : il pilote un vrai navigateur Chromium (Playwright), ce qu'Android
+ne permet pas. Il continue donc de tourner sur le PC. L'application Android (`android/`, APK fourni) est une
+**télécommande** : elle affiche l'interface du bot et permet de le démarrer, l'arrêter et suivre les logs.
+
+1. Sur le PC : lancez **`run-mobile.bat`** (au lieu de `run.bat`) et choisissez un mot de passe. Au démarrage, les logs
+   affichent « Sur le téléphone : http://192.168.x.x:8000 ». Au premier lancement, Windows demande d'autoriser
+   Python sur le réseau privé : acceptez.
+2. Sur le téléphone (même Wi-Fi) : installez `GiveawayBot.apk` (autoriser « sources inconnues »), entrez l'adresse
+   `192.168.x.x:8000`, puis le mot de passe. Le menu ⋮ permet de changer l'adresse.
+3. Hors de chez vous : installez [Tailscale](https://tailscale.com) (gratuit) sur le PC et le téléphone, puis utilisez
+   l'adresse Tailscale du PC. N'exposez jamais le port 8000 directement sur Internet.
+
+Sécurité : dès que le serveur écoute sur le réseau (`BOT_HOST=0.0.0.0`), un **mot de passe est obligatoire** (le serveur
+refuse de démarrer sinon) ; 8 essais ratés bloquent l'IP 15 minutes. Le trafic est en http sur votre réseau local.
+Le PC doit rester allumé : si le téléphone se déconnecte, le bot continue de tourner.
+
+Reconstruire l'APK : `cd android && gradle assembleRelease` (JDK 17+, SDK Android 34 ; `ANDROID_HOME` défini).
+La clé de signature `android/app/giveawaybot.keystore` est publique (mot de passe `giveawaybot`) : elle sert uniquement à
+installer les mises à jour par-dessus l'ancienne version ; ne vous en servez pas pour autre chose.
+
 ## Priorité des concours
 
 Le bot ne participe plus dans l'ordre où il tombe sur les posts : il **lit d'abord tout ce qu'il trouve**, met les
