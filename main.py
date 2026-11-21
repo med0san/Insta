@@ -32,8 +32,12 @@ async def lifespan(app: FastAPI):
     bus.log("Serveur démarré.", "success")
     asyncio.create_task(auth.refresh())
     if access.REMOTE:
-        ip = access.lan_ip()
-        bus.log(f"Accès réseau activé (mot de passe requis). Sur le téléphone : http://{ip or '<ip-du-pc>'}:8000", "warning")
+        found = access.addresses()
+        bus.log("Accès réseau activé (mot de passe requis).", "warning")
+        for ip in found["tailscale"]:
+            bus.log(f"Sur le téléphone (Tailscale, marche en 4G) : {ip}:8000", "warning")
+        for ip in found["lan"]:
+            bus.log(f"Sur le téléphone (même Wi-Fi seulement) : {ip}:8000", "warning")
     cfg = await db.get_config()
     if cfg.get("bot_enabled"):       # le bot tournait avant l'arrêt / le plantage du serveur : on le relance
         asyncio.create_task(_resume_bot())

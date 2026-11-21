@@ -2,6 +2,12 @@
 REM Lance le serveur ACCESSIBLE depuis le téléphone (même Wi-Fi), protégé par mot de passe.
 REM Le bot tourne sur ce PC ; le téléphone sert de télécommande (application Android ou navigateur).
 cd /d "%~dp0"
+if not exist access.py (
+  echo ERREUR : fichiers manquants ^(access.py^). La mise a jour est incomplete :
+  echo decompressez le ZIP en entier par-dessus ce dossier, puis relancez.
+  pause
+  exit /b 1
+)
 if not exist .venv (
   python -m venv .venv
   .venv\Scripts\python -m pip install --upgrade pip
@@ -20,8 +26,8 @@ if "%ACCESS_PASSWORD%"=="" (
 set BOT_HOST=0.0.0.0
 echo.
 echo ================================================================
-echo  Dans l'application Android, entrez l'adresse ci-dessous
-echo  (la ligne "Sur le telephone" apparait dans les logs au demarrage)
+echo  Adresse a saisir dans l'application Android :
+.venv\Scripts\python netinfo.py
 echo ================================================================
 :loop
 .venv\Scripts\uvicorn main:app --host 0.0.0.0 --port 8000

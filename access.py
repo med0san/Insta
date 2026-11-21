@@ -67,6 +67,22 @@ def lan_ip() -> str | None:
         return None
 
 
+def addresses() -> dict[str, list[str]]:
+    """Adresses du PC utilisables depuis le téléphone : réseau local (Wi-Fi/Ethernet) et Tailscale (100.x.x.x)."""
+    ips: set[str] = set()
+    main = lan_ip()
+    if main:
+        ips.add(main)
+    try:
+        ips.update(socket.gethostbyname_ex(socket.gethostname())[2])
+    except OSError:
+        pass
+    ips = {i for i in ips if not i.startswith(("127.", "169.254.", "0."))}
+    tailscale = sorted(i for i in ips if i.startswith("100.") and 64 <= int(i.split(".")[1]) <= 127)
+    lan = sorted(i for i in ips if i not in tailscale)
+    return {"lan": lan, "tailscale": tailscale}
+
+
 LOGIN_HTML = """<!doctype html><html lang="fr"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>Giveaway Bot</title>
 <style>

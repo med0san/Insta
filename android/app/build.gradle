@@ -10,8 +10,8 @@ android {
         applicationId 'com.giveawaybot.remote'
         minSdk 24
         targetSdk 34
-        versionCode 1
-        versionName '1.0'
+        versionCode 2
+        versionName '1.1'
     }
 
     // Clé de signature fixe (application personnelle installée hors Play Store) : les mises à jour

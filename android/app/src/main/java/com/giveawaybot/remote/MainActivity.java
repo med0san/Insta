@@ -125,7 +125,9 @@ public class MainActivity extends Activity {
                 if (request.isForMainFrame()) {
                     loadFailed = true;
                     showError("Impossible de joindre le serveur\n" + serverUrl() + "\n\n"
-                            + "Vérifiez que le PC est allumé, que run-mobile.bat tourne et que le téléphone est sur le même Wi-Fi.");
+                            + "Vérifiez que le PC est allumé et que run-mobile.bat tourne.\n\n"
+                            + "Téléphone en 4G ou sur un autre réseau que le PC : il faut Tailscale (gratuit) sur le PC ET sur le téléphone, "
+                            + "puis l'adresse 100.x.x.x:8000.");
                 }
             }
         });
@@ -192,7 +194,9 @@ public class MainActivity extends Activity {
                 .setView(box)
                 .setPositiveButton("Connecter", (d, w) -> {
                     String url = normalize(input.getText().toString());
-                    if (!url.isEmpty()) {
+                    if (isUnusable(url)) {
+                        showBadAddress();
+                    } else if (!url.isEmpty()) {
                         prefs().edit().putString(KEY_URL, url).apply();
                         loadServer();
                     } else if (firstRun) {
@@ -204,10 +208,31 @@ public class MainActivity extends Activity {
         b.show();
     }
 
+    /** 0.0.0.0 est le mode d'écoute du serveur, 127.0.0.1/localhost désignent le téléphone lui-même. */
+    private static boolean isUnusable(String url) {
+        String host = Uri.parse(url.isEmpty() ? "http://x" : url).getHost();
+        return host != null && (host.equals("0.0.0.0") || host.equals("127.0.0.1") || host.equals("localhost"));
+    }
+
+    private void showBadAddress() {
+        new AlertDialog.Builder(this)
+                .setTitle("Adresse inutilisable")
+                .setMessage("0.0.0.0, 127.0.0.1 et localhost ne fonctionnent pas depuis le téléphone.\n\n"
+                        + "Utilisez l'adresse affichée par run-mobile.bat :\n"
+                        + "• 100.x.x.x:8000 (Tailscale) si le téléphone est en 4G ou sur un autre réseau que le PC\n"
+                        + "• 192.168.x.x:8000 seulement si le téléphone est sur le même Wi-Fi que le PC")
+                .setPositiveButton("Corriger", (d, w) -> askAddress(false))
+                .show();
+    }
+
     private void loadServer() {
         String url = serverUrl();
         if (url.isEmpty()) {
             askAddress(true);
+            return;
+        }
+        if (isUnusable(url)) {          // adresse invalide déjà enregistrée par une version précédente
+            showBadAddress();
             return;
         }
         loadFailed = false;
