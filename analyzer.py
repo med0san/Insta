@@ -120,7 +120,13 @@ STORY_RE = re.compile(
     r"\bpartag\w*\s+(?:cette|ce|cet|le|la|l')\s*(?:publication|post|reel|video|giveaway|concours)|"
     r"\bshare (?:this|the) (?:post|reel|giveaway))"
 )
-DM_RE = re.compile(r"(\ben (?:mp|dm)\b|message prive|\bdm (?:us|moi|nous)\b|\benvoie\w*[^.\n]{0,30}\b(?:mp|dm)\b)")
+DM_RE = re.compile(
+    r"(\b(?:envoie|envoyez|envoyer|ecris|ecrivez|ecrire|partage|partagez|partager|send|dm)\w*[^.\n]{0,40}"
+    r"\b(?:en mp|en dm|par mp|par dm|en message prive|par message prive|en prive)\b"
+    r"|\b(?:dm|mp)[- ](?:us|moi|nous|me)\b)"
+)
+# l'organisateur contacte / annonce le gagnant : ça ne demande rien au participant
+WINNER_CONTACT_RE = re.compile(r"\b(gagnant\w*|winner\w*|contactera|contacte|contactes|contacted|sera prevenu|sera averti|tirage|annonc\w*)\b")
 NEGATION_RE = re.compile(r"\b(pas besoin|inutile|no need|pas obligatoire|non obligatoire|sans obligation)\b")
 OTHER_PLATFORM_RE = re.compile(
     r"\b(tiktok|youtube|facebook|twitter|snapchat|twitch|linkedin|pinterest|newsletter|telegram|discord|whatsapp)\b"
@@ -379,7 +385,7 @@ def _scan_conditions(caption: str, keyword: str | None) -> tuple[list[str], str 
         if STORY_RE.search(ns) and not NEGATION_RE.search(ns):
             needs_story = True  # faisable : republication / story (obligatoire ou bonus)
         if not optional:
-            if DM_RE.search(ns):
+            if DM_RE.search(ns) and not WINNER_CONTACT_RE.search(ns):
                 unsupported.append(f"envoi en message privé obligatoire (phrase : « {s[:100]} »)")
             else:
                 m = OTHER_PLATFORM_RE.search(ns)
@@ -534,12 +540,11 @@ LLM_SCHEMA: dict[str, Any] = {
         "question": {"type": "string"},
         "needs_save": {"type": "boolean"},
         "needs_story": {"type": "boolean"},
-        "unsupported_conditions": {"type": "array", "items": {"type": "string"}},
         "reason": {"type": "string"},
     },
     "required": [
         "is_giveaway", "accounts_to_follow", "follow_tagged_accounts", "friends_count", "comment_keyword",
-        "question", "needs_save", "needs_story", "unsupported_conditions", "reason",
+        "question", "needs_save", "needs_story", "reason",
     ],
 }
 
@@ -554,7 +559,6 @@ Réponds uniquement avec l'objet JSON demandé.
 - question : copie EXACTE de la question à laquelle il faut répondre en commentaire (ex : « dis-moi quel cadeau te fait envie »). Une accroche comme « Envie de gagner … ? », « Prêt à … ? » ou « Et si … ? » n'est PAS une question à répondre. Chaîne vide sinon.
 - needs_save : vrai s'il faut enregistrer la publication.
 - needs_story : vrai si la légende parle de partager / republier en story (obligatoire ou bonus).
-- unsupported_conditions : conditions OBLIGATOIRES impossibles à automatiser : message privé, abonnement TikTok/YouTube/Facebook/newsletter, achat. La story / republication est faisable : ne la mets PAS ici.
 - reason : une phrase courte en français."""
 
 ANSWER_SCHEMA: dict[str, Any] = {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}
@@ -677,11 +681,9 @@ def _merge(rules: dict[str, Any], llm: dict[str, Any], caption: str, author: str
     if keyword and question and _norm(keyword) in _norm(question) and not rules["custom_keyword"]:
         keyword = None  # « noire ou rose » : option de la question, pas un mot imposé
 
-    unsupported = [
-        u for u in rules["unsupported"] + [str(x) for x in llm.get("unsupported_conditions") or []]
-        if u.strip() and not STORY_RE.search(_norm(u))
-    ]
-    unsupported = list(dict.fromkeys(unsupported))
+    # Conditions impossibles : UNIQUEMENT celles que les règles prouvent par une phrase de la légende.
+    # (Un petit modèle recopie les exemples du prompt : on ne lui fait pas confiance sur ce point.)
+    unsupported = list(dict.fromkeys(u for u in rules["unsupported"] if not STORY_RE.search(_norm(u))))
 
     is_giveaway = bool(llm.get("is_giveaway")) or rules["is_giveaway"]
     details = list(rules["_details"])

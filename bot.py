@@ -90,6 +90,12 @@ class Bot:
         cfg = await db.get_config()
         mode = "DRY-RUN (simulation)" if cfg["dry_run"] else "RÉEL"
         bus.log(f"Démarrage du bot — mode {mode}", "success")
+        bus.log(
+            f"Options : participer quand même = {'OUI' if cfg.get('force_participate', True) else 'NON (les concours avec condition impossible sont ignorés)'}"
+            f" · story/republication = {'OUI' if cfg.get('do_story', True) else 'NON'}"
+            f" · analyse = {cfg.get('analyzer_mode', 'rules')} · vitesse = {cfg.get('speed', 'human')}",
+            "info",
+        )
         self._set_activity("Ouverture du navigateur")
         try:
             ctx = await ig.browser.acquire("bot", headless=bool(cfg.get("headless", True)))
@@ -310,7 +316,7 @@ def build_plan(result: dict[str, Any], cfg: dict[str, Any], rng: random.Random |
         if force:
             notes.append(txt + " → participation partielle")
         else:
-            skip = txt + "."
+            skip = txt + ". (Activez « Participer quand même » pour participer malgré cela.)"
 
     pool = [f.strip().lstrip("@") for f in cfg.get("friends_to_tag", []) if f.strip()]
     needed = int(result.get("friends_count") or 0)
