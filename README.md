@@ -102,6 +102,21 @@ La clé est stockée en clair dans `giveaways.db` (local) et n'est jamais renvoy
 
 Dans les deux modes IA, les pseudos inventés par le modèle sont filtrés (seuls ceux présents dans la légende sont gardés).
 
+## Vérifier ce que fait le bot
+
+- **Tester une légende** : collez la légende d'un concours, le bot affiche la liste exacte des actions qu'il
+  ferait (commentaire compris) sans rien publier. Idéal pour vérifier un concours avant de lancer le bot.
+- **Historique détaillé** : cliquez sur une ligne pour voir la légende lue par le bot et chaque action
+  avec son résultat (✓ réussi, ✗ échec et pourquoi, ○ simulé). Statut **Partiel** = au moins une action a échoué.
+- En mode réel, chaque action est indépendante : un bouton introuvable n'empêche pas les suivantes.
+
+Garde-fous contre les erreurs des modèles d'IA (surtout les petits modèles locaux) :
+- une phrase d'accroche (« Envie de gagner … ? », « Prêt à … ? ») n'est jamais traitée comme une question ;
+- la réponse à une vraie question est rédigée par un 2e appel dédié, et rejetée si elle recopie la légende ;
+- un mot imposé n'est retenu que s'il suit une consigne (« commente X », « commente avec 🎄 », guillemets) ;
+- story, enregistrement et amis à identifier ne sont acceptés que si la légende en parle ;
+- les comptes **identifiés sur la photo** et les **co-auteurs** du post sont relevés sur la page.
+
 ## Réglages « ne rien ignorer »
 
 | Réglage | Effet |

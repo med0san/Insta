@@ -315,6 +315,27 @@
       </div>
     </div>
 
+    <!-- Tester une légende -->
+    <section class="card p-5">
+      <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+        <div>
+          <h2 class="text-sm font-semibold text-white">Tester une légende</h2>
+          <p class="text-xs text-mute mt-0.5">Collez la légende d'un concours : le bot affiche exactement ce qu'il ferait (rien n'est publié).</p>
+        </div>
+        <span id="testMode" class="text-xs text-mute"></span>
+      </div>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div class="space-y-2">
+          <textarea id="testCaption" rows="9" class="input font-mono text-xs leading-relaxed" placeholder="🎁 CONCOURS 🎁&#10;Pour participer :&#10;✨ Suis @compte…"></textarea>
+          <div class="flex gap-2">
+            <input id="testAuthor" class="input" placeholder="@compte_auteur (optionnel)" />
+            <button id="testBtn" class="btn btn-primary whitespace-nowrap">Analyser</button>
+          </div>
+        </div>
+        <div id="testOut" class="rounded-[10px] border border-line bg-bg p-4 text-sm min-h-[120px] text-mute">Le résultat s'affichera ici.</div>
+      </div>
+    </section>
+
     <!-- Historique -->
     <section class="card overflow-hidden">
       <div class="flex flex-wrap items-center justify-between gap-3 px-5 py-3 border-b border-line">
@@ -325,7 +346,7 @@
         <div class="flex items-center gap-2">
           <select id="histFilter" class="input !w-auto !py-1.5 text-xs">
             <option value="">Tous les statuts</option>
-            <option>Participé</option><option>Simulé</option><option>Ignoré</option><option>Erreur</option>
+            <option>Participé</option><option>Partiel</option><option>Simulé</option><option>Ignoré</option><option>Erreur</option>
           </select>
           <button id="histClear" class="btn btn-ghost !py-1.5 !px-3 text-xs">Vider</button>
         </div>
@@ -611,6 +632,7 @@ function connectWS() {
 
 // ---------------- Historique ----------------
 const STATUS_STYLE = {
+  'Partiel': 'bg-amber-950/40 text-amber-300 border-amber-900/70',
   'Participé': 'bg-green-950/50 text-green-400 border-green-900',
   'Simulé': 'bg-sky-950/40 text-sky-300 border-sky-900/70',
   'Ignoré': 'bg-neutral-900 text-neutral-400 border-line',
@@ -629,16 +651,58 @@ function renderHistory() {
   $('#histBody').innerHTML = rows.map(r => {
     const short = r.url.replace('https://www.instagram.com', '');
     const d = r.created_at.replace('T', ' ').slice(5, 16);
-    return `<tr class="border-b border-line/70 hover:bg-soft/60 align-top">
+    const open = openRows.has(r.url);
+    const acts = (r.actions || []).map(a => {
+      const icon = a.ok === true ? '<span class="text-green-400">✓</span>' : a.ok === false ? '<span class="text-red-400">✗</span>' : '<span class="text-sky-300">○</span>';
+      return `<li class="flex gap-2">${icon}<span class="text-neutral-200">${esc(a.action)}</span><span class="text-mute">— ${esc(a.detail || '')}</span></li>`;
+    }).join('');
+    const detail = open ? `<tr class="border-b border-line/70 bg-[#101010]"><td colspan="6" class="px-5 py-4">
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 text-xs">
+          <div><p class="label mb-2">Légende lue par le bot</p><pre class="whitespace-pre-wrap font-sans text-neutral-300 max-h-72 overflow-y-auto scroll">${esc(r.caption || '(non enregistrée — posts traités avant cette version)')}</pre></div>
+          <div><p class="label mb-2">Actions</p>${acts ? `<ul class="space-y-1.5">${acts}</ul>` : '<p class="text-mute">Aucune action (post ignoré ou traité avant cette version).</p>'}</div>
+        </div></td></tr>` : '';
+    return detail ? rowHtml() + detail : rowHtml();
+    function rowHtml() { return `<tr data-url="${esc(r.url)}" class="border-b border-line/70 hover:bg-soft/60 align-top cursor-pointer" title="Cliquer pour voir la légende et le détail des actions">
       <td class="px-5 py-2.5 font-mono text-xs text-mute whitespace-nowrap">${esc(d)}</td>
       <td class="px-3 py-2.5 whitespace-nowrap">${r.account ? `<a class="hover:underline" href="https://www.instagram.com/${encodeURIComponent(r.account)}/" target="_blank" rel="noopener">@${esc(r.account)}</a>` : '<span class="text-mute">—</span>'}</td>
       <td class="px-3 py-2.5 whitespace-nowrap"><a class="font-mono text-xs text-neutral-300 hover:text-white underline decoration-neutral-700 underline-offset-2" href="${esc(r.url)}" target="_blank" rel="noopener">${esc(short)}</a>${r.hashtag ? `<div class="text-[11px] text-mute mt-0.5">#${esc(r.hashtag)}</div>` : ''}</td>
       <td class="px-3 py-2.5"><span class="inline-block text-xs rounded-full border px-2 py-0.5 whitespace-nowrap ${STATUS_STYLE[r.status] || STATUS_STYLE['Ignoré']}">${esc(r.status)}</span></td>
       <td class="px-3 py-2.5 text-xs text-neutral-300 min-w-[260px] max-w-[460px]">${esc(r.reason)}</td>
       <td class="px-5 py-2.5 text-xs text-neutral-400 font-mono min-w-[140px]">${esc(r.comment || '')}</td>
-    </tr>`;
+    </tr>`; }
   }).join('');
 }
+const openRows = new Set();
+$('#histBody').addEventListener('click', e => {
+  if (e.target.closest('a')) return;
+  const tr = e.target.closest('tr[data-url]'); if (!tr) return;
+  const u = tr.dataset.url; openRows.has(u) ? openRows.delete(u) : openRows.add(u); renderHistory();
+});
+
+// ---------------- Tester une légende ----------------
+$('#testBtn').onclick = async () => {
+  const out = $('#testOut'), btn = $('#testBtn');
+  const caption = $('#testCaption').value.trim();
+  if (!caption) { out.textContent = 'Collez une légende.'; return; }
+  btn.disabled = true; out.innerHTML = '<span class="text-mute">Analyse en cours… (jusqu\'à ~30 s avec un modèle d\'IA)</span>';
+  try {
+    const r = await api('/api/analyze', { method: 'POST', body: JSON.stringify({ caption, author: $('#testAuthor').value }) });
+    const res = r.result, plan = r.plan;
+    const modeName = { rules: 'règles', ollama: 'Ollama', api: 'API IA' }[r.mode] || r.mode;
+    $('#testMode').textContent = 'Analyse : ' + modeName;
+    const badge = (ok, t) => `<span class="inline-block rounded-full border px-2 py-0.5 text-xs ${ok ? 'border-green-900 text-green-400 bg-green-950/30' : 'border-red-900/70 text-red-400 bg-red-950/30'}">${t}</span>`;
+    let html = `<div class="flex flex-wrap gap-2 mb-3">${badge(res.is_giveaway, res.is_giveaway ? 'Concours' : 'Pas un concours')} ${res.is_giveaway ? badge(res.is_active, res.is_active ? 'Actif' : 'Terminé / expiré') : ''}</div>
+      <p class="text-xs text-neutral-300 mb-3">${esc(res.reason)}</p>`;
+    if (plan) {
+      html += `<p class="label mb-1.5">Le bot ferait, dans l'ordre</p><ol class="list-decimal pl-5 space-y-1 text-neutral-200 text-xs">${plan.steps.map(s => `<li>${esc(s)}</li>`).join('')}</ol>`;
+      if (plan.notes.length) html += `<ul class="mt-3 space-y-1 text-xs text-amber-300">${plan.notes.map(n => `<li>⚠ ${esc(n)}</li>`).join('')}</ul>`;
+      if (plan.skip_reason) html += `<p class="mt-3 text-xs text-red-400">Ignoré : ${esc(plan.skip_reason)}</p>`;
+      if (res.question) html += `<p class="mt-3 text-xs text-mute">Question détectée : « ${esc(res.question)} »</p>`;
+    }
+    out.innerHTML = html;
+  } catch (e) { out.innerHTML = `<span class="text-red-400">${esc(e.message)}</span>`; }
+  finally { btn.disabled = false; }
+};
 $('#histFilter').onchange = renderHistory;
 $('#histClear').onclick = async () => {
   if (!confirm("Vider tout l'historique ? Les posts déjà traités pourront être re-analysés.")) return;

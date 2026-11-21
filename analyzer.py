@@ -127,14 +127,32 @@ OTHER_PLATFORM_RE = re.compile(
 )
 JOIN_RE = re.compile(r"\b(inscri\w*|rejoin\w*|join)\b")
 
-# Question à laquelle il faut répondre en commentaire
-QUESTION_RE = re.compile(
-    r"(\b(?:dis|dites)[- ](?:moi|nous)\b|\b(?:me|nous) dire\b|\bdire[- ](?:moi|nous)\b|\btell (?:me|us)\b|"
-    r"\braconte\w*|\breponds?\w*|\brepondez\b|\brepondre\b|\bexplique\w*|\banswer\b|\bpourquoi\b|\bwhy\b|"
-    r"\bquel(?:le)?s?\b[^.\n?]{0,40}\b(?:te|vous|tu|ton|ta|tes|vos)\b|"
-    r"\bwhich\b[^.\n?]{0,40}\b(?:you|your)\b|\bwhat\b[^.\n?]{0,30}\byour\b)"
+# « Suivre les comptes identifiés sur la photo » : comptes tagués dans l'image, absents de la légende
+TAGGED_RE = re.compile(
+    r"(\b(?:comptes?|marques?|partenaires?|pages?|profils?|createur\w*|createurs?)\b[^.\n]{0,25}"
+    r"\b(?:identifi|tagu|tagg|mentionn)\w*[^.\n]{0,25}\b(?:photo|publication|post|image|visuel|carrousel|video|reel)\b)"
+    r"|(\b(?:identifi|tagu|tagg)\w*\s+(?:sur|en|dans)\s+(?:la |le |l'|cette |ce )?(?:photo|publication|post|image|visuel|carrousel)\b)"
 )
 
+# Vraie question à laquelle répondre, ou simple slogan d'accroche (« Envie de gagner … ? ») ?
+EXPLICIT_ASK_RE = re.compile(
+    r"(\b(?:dis|dites)[- ](?:moi|nous)\b|\b(?:me|nous) (?:dire|disant)\b|\bdire[- ](?:moi|nous)\b|\btell (?:me|us)\b|"
+    r"\braconte\w*|\breponds?\b|\brepondez\b|\brepondre\b|\bexplique\w*|\banswer\b|"
+    r"en commentaire[^.!?\n]{0,60}\b(?:quel\w*|qui|pourquoi|ce que|ton|ta|tes|votre|vos)\b)"
+)
+WH_RE = re.compile(r"\b(quel\w*|lequel|laquelle|lesquel\w*|pourquoi|combien|avec qui|which|what|why|who)\b")
+HOOK_RE = re.compile(
+    r"^(?:et )?(envie|tu veux|vous voulez|ca te dit|ca vous dit|qui veut|qui a envie|pret|prete|prets|pretes|alors|"
+    r"et si|vous aussi|toi aussi|besoin|marre|devinez|qui n'a|vous revez|tu reves|on vous|quoi de mieux|"
+    r"want|ready|who wants)\b"
+)
+WIN_RE = re.compile(r"\b(gagner|remporter|tenter|win|gagnez|gagne|remportez)\b")
+KW_LEAD_RE = re.compile(
+    r"(?:comment\w*|ecri\w*|tape\w*|ajoute\w*|poste\w*|laisse\w*|write|type|say|mot[- ]cle|\bmot\b|keyword)"
+    r"(?:\s*(?:le mot(?:[- ]cle)?|avec|the word|:|par|juste|l'emoji|un emoji|l'emoji suivant|simplement|uniquement))*\s*:?\s*[\"«“']?\s*$"
+)
+
+# Question à laquelle il faut répondre en commentaire
 END_CTX_RE = re.compile(
     r"(jusqu|avant le|avant minuit|au plus tard|fin le|fin du|se termine|termine le|prend fin|"
     r"cloture|clos le|until|till|through|ends?\b|ending|deadline|\bby\b|tirage|draw|limite|"
@@ -210,7 +228,7 @@ def _split_sentences(caption: str) -> list[str]:
     return [s.strip() for s in re.split(r"\n|(?<=[.!?])\s+", caption) if len(s.strip()) >= 4]
 
 
-def _accounts_to_follow(caption: str, author: str | None) -> list[str]:
+def _accounts_to_follow(caption: str, author: str | None, collaborators: list[str] | None = None) -> list[str]:
     if not FOLLOW_RE.search(_norm(caption)):
         return []
     accounts: list[str] = []
@@ -229,6 +247,7 @@ def _accounts_to_follow(caption: str, author: str | None) -> list[str]:
             needs_author = True
     if author and (needs_author or not accounts):
         accounts.insert(0, author)
+        accounts[1:1] = list(collaborators or [])  # post en collaboration : « nous » = tous les co-auteurs
     seen: set[str] = set()
     out = []
     for a in accounts:
@@ -239,6 +258,12 @@ def _accounts_to_follow(caption: str, author: str | None) -> list[str]:
     return out
 
 
+KEYWORD_DIRECT_RE = re.compile(
+    r"\b(?i:commente[sz]?|comment|écris|ecris|écrivez|tape[sz]?)\b\s*(?i:avec\s*)?(?i:l'emoji|un emoji|l’emoji|le mot|le mot[- ]clé|le mot[- ]cle)?\s*:?\s*"
+    r"(?:([^\w\s@#,.;:!?()\"'«»“”-]{1,8})|\b([A-ZÀ-Ý][A-ZÀ-Ý0-9]{2,19})\b)"
+)
+
+
 def _custom_keyword(caption: str) -> str | None:
     m = KEYWORD_QUOTED_RE.search(caption)
     if m:
@@ -246,18 +271,23 @@ def _custom_keyword(caption: str) -> str | None:
     m = KEYWORD_WORD_RE.search(caption)
     if m:
         return m.group(1).strip()
+    # « commente ❄️ », « commente avec l'emoji 🎄 », « commente OUI »
+    m = KEYWORD_DIRECT_RE.search(caption)
+    if m:
+        return (m.group(1) or m.group(2)).strip()
     return None
 
 
 def _prize(caption: str) -> str | None:
     m = re.search(
-        r"(?:à gagner|a gagner|gagner|gagne|remporte(?:r|z)?|to win|win)\s*:?\s*([^\n.!?]{3,70})",
+        r"(?:à gagner|a gagner|pour gagner|gagner|gagnez|gagne|remporter|to win)\s*:?\s*([^\n.!?,@#(]{4,60})",
         caption,
         re.I,
     )
     if not m:
         return None
-    return re.sub(r"\s+\S{1,2}$", "", m.group(1).strip(" :-–—")).strip() or None
+    txt = re.sub(r"\s+\S{1,2}$", "", m.group(1).strip(" :-–—")).strip()
+    return txt if len(txt) >= 4 and re.match(r"\w", txt) else None
 
 
 def _choice_from_question(question: str) -> str | None:
@@ -266,6 +296,75 @@ def _choice_from_question(question: str) -> str | None:
     parts = [p.strip(" ,;?!.") for p in re.split(r"\s+ou\s+|\s+or\s+", tail, flags=re.I)]
     if len(parts) == 2 and all(1 <= len(p) <= 30 for p in parts):
         return random.choice(parts)
+    return None
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"\w+", _norm(text))
+
+
+def _is_real_question(sentence: str) -> bool:
+    """Vraie question à laquelle répondre en commentaire (pas un slogan rhétorique)."""
+    ns = re.sub(r"^[^\w]+", "", _norm(sentence))
+    if EXPLICIT_ASK_RE.search(ns):
+        return True
+    if "?" not in sentence or HOOK_RE.match(ns) or WIN_RE.search(ns):
+        return False
+    return bool(WH_RE.search(ns)) or " ou " in ns
+
+
+def _quote_in_caption(quote: str, caption: str) -> bool:
+    """La citation renvoyée par le modèle figure-t-elle vraiment dans la légende ?"""
+    qw = [w for w in _words(quote) if len(w) > 2]
+    if not qw:
+        return False
+    cw = set(_words(caption))
+    return sum(w in cw for w in qw) / len(qw) >= 0.7
+
+
+def _valid_keyword(kw: str | None, caption: str) -> str | None:
+    """Garde le mot-clé seulement s'il est imposé par une consigne (« commente X », guillemets…)."""
+    kw = (kw or "").strip().strip("\"'«»“” ")
+    if not kw or len(kw) > 60 or kw.startswith("@"):
+        return None
+    nc, nk = _norm(caption), _norm(kw)
+    for m in re.finditer(re.escape(nk), nc):
+        before = nc[max(0, m.start() - 80): m.start()]
+        if re.search(r"[\"«“]\s*$", before) or KW_LEAD_RE.search(before):
+            return kw
+    return None
+
+
+def _valid_answer(ans: str | None, caption: str) -> str | None:
+    """Rejette une « réponse » qui recopie la légende ou qui est elle-même une question."""
+    if not ans:
+        return None
+    ans = MENTION_RE.sub("", str(ans))
+    ans = re.sub(r"#\w+", "", ans)
+    ans = re.sub(r"\s+", " ", ans).strip(" \"'«»“”")
+    if len(ans) < 2 or len(ans) > 220 or ans.endswith("?"):
+        return None
+    aw, cap = _words(ans), " ".join(_words(caption))
+    for i in range(max(0, len(aw) - 4)):
+        if " ".join(aw[i:i + 5]) in cap:
+            return None  # 5 mots consécutifs copiés de la légende
+    return ans
+
+
+RULE_ANSWERS = [
+    (re.compile(r"\bavec qui\b"), "Avec ma famille, sans hésiter ! 🥰"),
+    (re.compile(r"\ba qui\b"), "À ma maman, elle le mérite tellement ! 🥰"),
+    (re.compile(r"\bpourquoi\b|\bwhy\b"), "Parce que ça me ferait vraiment plaisir ! 😍"),
+    (re.compile(r"\bquand\b"), "Pour les fêtes de fin d'année ! 🎄"),
+]
+
+
+def _rule_answer(question: str) -> str | None:
+    """Réponse simple pour quelques formes de question courantes (mode sans IA)."""
+    nq = _norm(question)
+    for pattern, answer in RULE_ANSWERS:
+        if pattern.search(nq):
+            return answer
     return None
 
 
@@ -287,10 +386,7 @@ def _scan_conditions(caption: str, keyword: str | None) -> tuple[list[str], str 
                 if m and (FOLLOW_RE.search(ns) or JOIN_RE.search(ns)):
                     unsupported.append(f"abonnement obligatoire sur une autre plateforme ({m.group(1)}) (phrase : « {s[:100]} »)")
         # « Team chat ou chien ? » : question à choix ; les slogans rhétoriques (« Envie de … ? ») sont ignorés
-        is_question = bool(QUESTION_RE.search(ns)) or (
-            s.rstrip().endswith("?") and " ou " in ns and not re.search(r"participer|gagner|concours|giveaway", ns)
-        )
-        if question is None and is_question and not (keyword and keyword.lower() in s.lower()):
+        if question is None and _is_real_question(s):
             clean = re.sub(r"\([^)]*\)", "", s)                 # retire les parenthèses « (1 commentaire = 1 chance) »
             clean = re.sub(r"^[^\w«\"“]+", "", clean)            # retire puces / emojis en début de phrase
             question = re.sub(r"\s+", " ", clean).strip()[:200]
@@ -303,6 +399,9 @@ def _conditions(result: dict[str, Any], norm: str) -> list[str]:
         out.append("suivre " + ", ".join("@" + a for a in result["accounts_to_follow"]))
     if LIKE_RE.search(norm):
         out.append("liker")
+    if result.get("follow_tagged"):
+        out.append("suivre les comptes identifiés sur la photo"
+                   + (f" ({len(result.get('tagged') or [])} trouvé(s))" if result.get("tagged") else " (aucun trouvé)"))
     if result["needs_save"]:
         out.append("enregistrer le post")
     if result["needs_story"]:
@@ -342,7 +441,13 @@ def _activity(caption: str, post_date: str | None, details: list[str]) -> tuple[
 # ---------------------------------------------------------------------------
 # Analyse par règles
 # ---------------------------------------------------------------------------
-def analyze_sync(caption: str, author: str | None = None, post_date: str | None = None) -> dict[str, Any]:
+def analyze_sync(
+    caption: str,
+    author: str | None = None,
+    post_date: str | None = None,
+    collaborators: list[str] | None = None,
+    tagged: list[str] | None = None,
+) -> dict[str, Any]:
     norm = _norm(caption)
 
     result: dict[str, Any] = {
@@ -354,6 +459,8 @@ def analyze_sync(caption: str, author: str | None = None, post_date: str | None 
         "needs_save": False,
         "needs_comment": False,
         "needs_story": False,
+        "follow_tagged": False,
+        "tagged": list(tagged or []),
         "question": None,
         "answer": None,
         "unsupported": [],
@@ -375,14 +482,19 @@ def analyze_sync(caption: str, author: str | None = None, post_date: str | None 
         return result
 
     result["is_giveaway"] = True
-    result["accounts_to_follow"] = _accounts_to_follow(caption, author)
+    result["accounts_to_follow"] = _accounts_to_follow(caption, author, collaborators)
+    result["follow_tagged"] = bool(TAGGED_RE.search(norm))
+    if result["follow_tagged"]:
+        for t in result["tagged"]:
+            if t.lower() not in {a.lower() for a in result["accounts_to_follow"]}:
+                result["accounts_to_follow"].append(t)
     result["friends_count"] = _count_friends(norm)
     result["custom_keyword"] = _custom_keyword(caption)
     result["needs_save"] = bool(SAVE_RE.search(norm))
     result["needs_comment"] = bool(COMMENT_RE.search(norm)) or result["friends_count"] > 0
     result["unsupported"], result["question"], result["needs_story"] = _scan_conditions(caption, result["custom_keyword"])
     if result["question"]:
-        result["answer"] = _choice_from_question(result["question"])
+        result["answer"] = _choice_from_question(result["question"]) or _rule_answer(result["question"])
     result["conditions"] = _conditions(result, norm)
 
     details = result["_details"]
@@ -409,41 +521,104 @@ def _active_reason(details: list[str], conditions: list[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Mode optionnel : modèle local via Ollama (gratuit)
+# Modèle d'IA (Ollama local ou API gratuite) : extraction des conditions, puis réponse à la question
 # ---------------------------------------------------------------------------
 LLM_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "is_giveaway": {"type": "boolean"},
-        "is_active": {"type": "boolean"},
         "accounts_to_follow": {"type": "array", "items": {"type": "string"}},
+        "follow_tagged_accounts": {"type": "boolean"},
         "friends_count": {"type": "integer"},
-        "custom_keyword": {"type": "string"},
+        "comment_keyword": {"type": "string"},
+        "question": {"type": "string"},
         "needs_save": {"type": "boolean"},
         "needs_story": {"type": "boolean"},
-        "question_answer": {"type": "string"},
         "unsupported_conditions": {"type": "array", "items": {"type": "string"}},
         "reason": {"type": "string"},
     },
     "required": [
-        "is_giveaway", "is_active", "accounts_to_follow", "friends_count", "custom_keyword",
-        "needs_save", "needs_story", "question_answer", "unsupported_conditions", "reason",
+        "is_giveaway", "accounts_to_follow", "follow_tagged_accounts", "friends_count", "comment_keyword",
+        "question", "needs_save", "needs_story", "unsupported_conditions", "reason",
     ],
 }
 
-LLM_SYSTEM = """Tu lis très attentivement la légende (et l'image si elle est fournie) d'une publication Instagram pour savoir si c'est un concours et QUOI FAIRE EXACTEMENT pour y participer.
+LLM_SYSTEM = """Tu es un expert des concours Instagram. Lis TOUTE la légende (et l'image si fournie) et liste précisément CE QU'IL FAUT FAIRE pour participer. Ne devine rien : n'extrais que ce qui est écrit.
 Réponds uniquement avec l'objet JSON demandé.
 
-- is_giveaway : vrai seulement s'il y a un lot à gagner (pas une annonce de gagnant, pas un achat obligatoire).
-- is_active : faux si la date de fin est dépassée à la date du jour ou si les gagnants sont annoncés.
-- accounts_to_follow : pseudos Instagram (sans @) à suivre, y compris les comptes de secours / partenaires. Seulement des pseudos écrits dans la légende ou le compte auteur.
-- friends_count : nombre d'amis à identifier en commentaire (0 si aucun).
-- custom_keyword : mot / phrase / emoji imposé en commentaire, sinon chaîne vide.
+- is_giveaway : vrai s'il y a un lot à gagner (faux pour une annonce de gagnant ou un achat obligatoire).
+- accounts_to_follow : TOUS les pseudos Instagram (sans @) qu'il faut suivre / auxquels il faut s'abonner : organisateur, partenaires, compte de secours. Si la légende dit « suivre notre compte / nous suivre », mets le compte auteur et les co-auteurs fournis.
+- follow_tagged_accounts : vrai si la légende demande de suivre « les comptes identifiés / tagués sur la photo / la publication ».
+- friends_count : nombre d'amis à identifier en commentaire (0 si aucun ; « identifie tes amis » sans nombre = 1).
+- comment_keyword : mot, phrase ou emoji IMPOSÉ à écrire en commentaire (ex : « commente PARTICIPE », « commente avec 🎄 »). Copie-le exactement. Chaîne vide s'il n'y en a pas. Ce n'est PAS une phrase de la légende ni la réponse à une question.
+- question : copie EXACTE de la question à laquelle il faut répondre en commentaire (ex : « dis-moi quel cadeau te fait envie »). Une accroche comme « Envie de gagner … ? », « Prêt à … ? » ou « Et si … ? » n'est PAS une question à répondre. Chaîne vide sinon.
 - needs_save : vrai s'il faut enregistrer la publication.
-- needs_story : vrai s'il faut (ou on peut) republier / partager le post en story.
-- question_answer : si la légende pose une vraie question ou demande de dire quelque chose en commentaire (ex : « dis-moi quel cadeau te fait envie »), rédige une réponse courte, naturelle, enthousiaste, en français, à la première personne (en t'appuyant sur l'image : nom d'un des lots visibles). Une phrase d'accroche rhétorique (« Envie de gagner ? ») n'est PAS une question. Sinon chaîne vide. N'inclus PAS les @ d'amis.
-- unsupported_conditions : conditions OBLIGATOIRES impossibles à automatiser : envoyer un message privé, s'abonner sur TikTok/YouTube/Facebook, acheter. La story / republication est FAISABLE : ne la mets PAS ici.
-- reason : une phrase courte en français résumant ta décision."""
+- needs_story : vrai si la légende parle de partager / republier en story (obligatoire ou bonus).
+- unsupported_conditions : conditions OBLIGATOIRES impossibles à automatiser : message privé, abonnement TikTok/YouTube/Facebook/newsletter, achat. La story / republication est faisable : ne la mets PAS ici.
+- reason : une phrase courte en français."""
+
+ANSWER_SCHEMA: dict[str, Any] = {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}
+ANSWER_SYSTEM = """Tu participes à un concours Instagram et tu dois répondre en commentaire à la question de l'organisateur.
+Écris UNE réponse courte (moins de 20 mots), naturelle, sincère, enthousiaste, en français, à la première personne, qui répond VRAIMENT à la question (si on te demande de choisir un lot, choisis-en un en le nommant ; si on te demande avec qui tu partagerais le lot, réponds « avec ma famille », etc.).
+N'écris ni @, ni hashtag, ne recopie pas la légende et ne pose pas de question.
+Réponds uniquement en JSON : {"answer": "..."}"""
+
+
+def _schema_hint(schema: dict[str, Any]) -> str:
+    kinds = {"boolean": "bool", "integer": "entier", "string": "chaîne", "array": "liste de chaînes"}
+    keys = ", ".join(f"{k} ({kinds.get(v.get('type'), 'valeur')})" for k, v in schema["properties"].items())
+    return f"\n\nRéponds avec UN SEUL objet JSON ayant exactement ces clés : {keys}. Aucun texte hors du JSON."
+
+
+async def _llm_json(cfg: dict[str, Any], system: str, text: str, image_b64: str | None, schema: dict[str, Any]) -> dict[str, Any]:
+    """Appel au modèle choisi (Ollama local ou API compatible OpenAI) et lecture du JSON renvoyé."""
+    if cfg.get("analyzer_mode") == "ollama":
+        message: dict[str, Any] = {"role": "user", "content": text}
+        if image_b64:
+            message["images"] = [image_b64]
+        payload = {
+            "model": cfg.get("ollama_model") or "gemma3:4b",
+            "stream": False,
+            "format": schema,
+            "options": {"temperature": 0.2},
+            "messages": [{"role": "system", "content": system}, message],
+        }
+        data = await asyncio.to_thread(_ollama_chat, cfg.get("ollama_url") or "http://localhost:11434", payload, 240)
+        return _extract_json(data["message"]["content"])
+
+    content: Any = text
+    if image_b64:
+        content = [
+            {"type": "text", "text": text},
+            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + image_b64}},
+        ]
+    payload = {
+        "model": cfg.get("api_model") or "gemini-2.5-flash",
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+        "messages": [{"role": "system", "content": system + _schema_hint(schema)}, {"role": "user", "content": content}],
+    }
+    if "generativelanguage.googleapis.com" in (cfg.get("api_base_url") or ""):
+        payload["reasoning_effort"] = "low"  # Gemini « réfléchit » sinon longuement : inutile ici
+    data = await _api_request(cfg, payload)
+    return _extract_json(data["choices"][0]["message"].get("content") or "")
+
+
+async def _llm_analyze(caption, author, post_date, image_b64, cfg, collaborators=None, tagged=None) -> dict[str, Any]:
+    text = (
+        f"Date du jour : {date.today().isoformat()}\n"
+        f"Compte auteur : {('@' + author) if author else 'inconnu'}\n"
+        + (f"Co-auteurs du post : {', '.join('@' + c for c in collaborators)}\n" if collaborators else "")
+        + (f"Comptes identifiés sur la photo : {', '.join('@' + t for t in tagged)}\n" if tagged else "")
+        + f"Date de publication : {post_date or 'inconnue'}\n\nLégende :\n\"\"\"\n{caption[:4000]}\n\"\"\""
+    )
+    return await _llm_json(cfg, LLM_SYSTEM, text, image_b64, LLM_SCHEMA)
+
+
+async def _llm_answer(question: str, caption: str, image_b64: str | None, cfg: dict[str, Any]) -> str | None:
+    text = f"Question de l'organisateur : « {question} »\n\nLégende du concours (contexte) :\n\"\"\"\n{caption[:2500]}\n\"\"\""
+    data = await _llm_json(cfg, ANSWER_SYSTEM, text, image_b64, ANSWER_SCHEMA)
+    return _valid_answer(data.get("answer"), caption)
 
 
 def _ollama_chat(base_url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
@@ -470,46 +645,38 @@ def ollama_status(base_url: str, model: str) -> dict[str, Any]:
     return {"ok": True, "models": names, "message": f"Ollama prêt, modèle « {model} » disponible."}
 
 
-async def _llm_analyze(caption, author, post_date, image_b64, cfg) -> dict[str, Any]:
-    user = (
-        f"Date du jour : {date.today().isoformat()}\n"
-        f"Compte auteur : {('@' + author) if author else 'inconnu'}\n"
-        f"Date de publication : {post_date or 'inconnue'}\n\nLégende :\n\"\"\"\n{caption[:4000]}\n\"\"\""
-    )
-    message: dict[str, Any] = {"role": "user", "content": user}
-    if image_b64:
-        message["images"] = [image_b64]
-    payload = {
-        "model": cfg.get("ollama_model") or "gemma3:4b",
-        "stream": False,
-        "format": LLM_SCHEMA,
-        "options": {"temperature": 0.2},
-        "messages": [{"role": "system", "content": LLM_SYSTEM}, message],
-    }
-    data = await asyncio.to_thread(_ollama_chat, cfg.get("ollama_url") or "http://localhost:11434", payload, 240)
-    return json.loads(data["message"]["content"])
-
-
-def _merge(rules: dict[str, Any], llm: dict[str, Any], caption: str, author: str | None, post_date: str | None = None) -> dict[str, Any]:
+def _merge(rules: dict[str, Any], llm: dict[str, Any], caption: str, author: str | None,
+           post_date: str | None = None, collaborators: list[str] | None = None,
+           tagged: list[str] | None = None) -> dict[str, Any]:
     low_caption = caption.lower()
-    allowed = {author.lower()} if author else set()
-    accounts = []
+    known = {h.lower() for h in [author or "", *(collaborators or []), *(tagged or [])] if h}
+    accounts = list(rules["accounts_to_follow"])
     for a in llm.get("accounts_to_follow") or []:
-        a = str(a).strip().lstrip("@")
-        if a and (a.lower() in allowed or a.lower() in low_caption):
+        a = str(a).strip().lstrip("@").rstrip(".")
+        # pseudos inventés par le modèle écartés : seuls ceux présents dans la légende / la page sont gardés
+        if a and (a.lower() in known or "@" + a.lower() in low_caption) and a.lower() not in {x.lower() for x in accounts}:
             accounts.append(a)
-    for a in rules["accounts_to_follow"]:
-        if a.lower() not in {x.lower() for x in accounts}:
-            accounts.append(a)
+    follow_tagged = rules["follow_tagged"] or bool(llm.get("follow_tagged_accounts"))
+    if follow_tagged:
+        for t in tagged or []:
+            if t.lower() not in {x.lower() for x in accounts}:
+                accounts.append(t)
+    norm = _norm(caption)
     try:
-        friends = max(int(llm.get("friends_count") or 0), rules["friends_count"])
+        llm_friends = int(llm.get("friends_count") or 0)
     except (TypeError, ValueError):
-        friends = rules["friends_count"]
-    answer = (llm.get("question_answer") or "").strip() or None
-    llm_kw = (llm.get("custom_keyword") or "").strip()
-    if llm_kw and (rules["question"] or "").lower().find(llm_kw.lower()) >= 0 and not rules["custom_keyword"]:
-        llm_kw = ""  # le « mot-clé » n'est en fait qu'une option de la question (« noire ou rose »)
-    # la story / republication est faisable : on ne la garde pas parmi les conditions impossibles
+        llm_friends = 0
+    # le modèle ne peut ajouter des amis / une story / un enregistrement que si la légende en parle vraiment
+    friends = max(llm_friends if re.search(TAG_VERB, norm) else 0, rules["friends_count"])
+
+    keyword = rules["custom_keyword"] or _valid_keyword(llm.get("comment_keyword"), caption)
+    llm_q = str(llm.get("question") or "").strip()
+    if llm_q and not (_quote_in_caption(llm_q, caption) and _is_real_question(llm_q)):
+        llm_q = ""  # accroche rhétorique ou citation inventée
+    question = rules["question"] or (llm_q[:200] or None)
+    if keyword and question and _norm(keyword) in _norm(question) and not rules["custom_keyword"]:
+        keyword = None  # « noire ou rose » : option de la question, pas un mot imposé
+
     unsupported = [
         u for u in rules["unsupported"] + [str(x) for x in llm.get("unsupported_conditions") or []]
         if u.strip() and not STORY_RE.search(_norm(u))
@@ -525,18 +692,21 @@ def _merge(rules: dict[str, Any], llm: dict[str, Any], caption: str, author: str
     out = dict(rules)
     out.update(
         is_giveaway=is_giveaway,
-        # Dates de fin et annonces de gagnants : jugées par des règles déterministes. Un petit modèle local
-        # répond souvent is_active=false à tort, on ne lui laisse donc pas ce verdict.
+        # Dates de fin et annonces de gagnants : jugées par des règles déterministes (un petit modèle répond
+        # souvent « inactif » à tort).
         is_active=is_giveaway and not hard,
         _hard_inactive=hard,
         accounts_to_follow=accounts,
+        follow_tagged=follow_tagged,
+        tagged=list(tagged or []),
         friends_count=max(0, min(friends, 10)),
-        custom_keyword=llm_kw or rules["custom_keyword"],
-        needs_save=bool(llm.get("needs_save")) or rules["needs_save"],
-        needs_story=bool(llm.get("needs_story")) or rules["needs_story"],
-        needs_comment=rules["needs_comment"] or friends > 0 or bool(answer),
-        answer=answer or rules["answer"],
-        question=rules["question"] or (answer and "question détectée par le modèle"),
+        custom_keyword=keyword,
+        needs_save=rules["needs_save"] or (bool(llm.get("needs_save")) and bool(SAVE_RE.search(norm))),
+        needs_story=rules["needs_story"] or (bool(llm.get("needs_story")) and bool(STORY_RE.search(norm))
+                                             and not NEGATION_RE.search(norm)),
+        needs_comment=rules["needs_comment"] or friends > 0 or bool(question) or bool(keyword),
+        question=question,
+        answer=rules["answer"] if question == rules["question"] else None,
         unsupported=unsupported,
     )
     out["conditions"] = _conditions(out, _norm(caption))
@@ -550,12 +720,6 @@ def _merge(rules: dict[str, Any], llm: dict[str, Any], caption: str, author: str
 # ---------------------------------------------------------------------------
 # Mode optionnel : API gratuite compatible OpenAI (Gemini, Groq, OpenRouter, Pollinations…)
 # ---------------------------------------------------------------------------
-JSON_HINT = (
-    "\n\nRéponds avec UN SEUL objet JSON ayant exactement ces clés : is_giveaway (bool), is_active (bool), "
-    "accounts_to_follow (liste de chaînes), friends_count (entier), custom_keyword (chaîne, \"\" si aucun), "
-    "needs_save (bool), needs_story (bool), question_answer (chaîne, \"\" si aucune), unsupported_conditions (liste de chaînes), "
-    "reason (chaîne). Aucun texte hors du JSON."
-)
 API_MIN_INTERVAL = 4.5          # secondes entre deux appels (les offres gratuites limitent les requêtes/minute)
 _api_lock = asyncio.Lock()
 _api_last = 0.0
@@ -632,33 +796,6 @@ async def _api_request(cfg: dict[str, Any], payload: dict[str, Any]) -> dict[str
             _api_last = asyncio.get_running_loop().time()
 
 
-async def _api_analyze(caption, author, post_date, image_b64, cfg) -> dict[str, Any]:
-    text = (
-        f"Date du jour : {date.today().isoformat()}\n"
-        f"Compte auteur : {('@' + author) if author else 'inconnu'}\n"
-        f"Date de publication : {post_date or 'inconnue'}\n\nLégende :\n\"\"\"\n{caption[:4000]}\n\"\"\""
-    )
-    content: Any = text
-    if image_b64:
-        content = [
-            {"type": "text", "text": text},
-            {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + image_b64}},
-        ]
-    payload = {
-        "model": cfg.get("api_model") or "gemini-2.5-flash",
-        "temperature": 0.2,
-        "response_format": {"type": "json_object"},
-        "messages": [
-            {"role": "system", "content": LLM_SYSTEM + JSON_HINT},
-            {"role": "user", "content": content},
-        ],
-    }
-    if "generativelanguage.googleapis.com" in (cfg.get("api_base_url") or ""):
-        payload["reasoning_effort"] = "low"  # Gemini « réfléchit » sinon longuement : inutile pour cette tâche
-    data = await _api_request(cfg, payload)
-    return _extract_json(data["choices"][0]["message"]["content"])
-
-
 async def api_status(cfg: dict[str, Any]) -> dict[str, Any]:
     if not cfg.get("api_base_url"):
         return {"ok": False, "message": "Adresse de l'API manquante."}
@@ -689,21 +826,31 @@ async def analyze_caption(
     post_date: str | None = None,
     image_b64: str | None = None,
     cfg: dict[str, Any] | None = None,
+    collaborators: list[str] | None = None,
+    tagged: list[str] | None = None,
 ) -> dict[str, Any]:
-    rules = analyze_sync(caption, author, post_date)
+    rules = analyze_sync(caption, author, post_date, collaborators, tagged)
     cfg = cfg or {}
     mode = cfg.get("analyzer_mode")
     if mode not in ("ollama", "api"):
         return rules
+    label = "API" if mode == "api" else "Ollama"
     try:
-        if mode == "ollama":
-            llm = await _llm_analyze(caption, author, post_date, image_b64, cfg)
-        else:
-            llm = await _api_analyze(caption, author, post_date, image_b64, cfg)
+        llm = await _llm_analyze(caption, author, post_date, image_b64, cfg, collaborators, tagged)
+        result = _merge(rules, llm, caption, author, post_date, collaborators, tagged)
     except urllib.error.HTTPError as e:
-        bus.log(f"{'API' if mode == 'api' else 'Ollama'} en erreur ({_http_detail(e)}) : repli sur l'analyse par règles.", "warning")
+        bus.log(f"{label} en erreur ({_http_detail(e)}) : repli sur l'analyse par règles.", "warning")
         return rules
     except (urllib.error.URLError, OSError, KeyError, IndexError, ValueError, TimeoutError, AnalyzerError) as e:
-        bus.log(f"{'API' if mode == 'api' else 'Ollama'} indisponible ({e}) : repli sur l'analyse par règles.", "warning")
+        bus.log(f"{label} indisponible ({e}) : repli sur l'analyse par règles.", "warning")
         return rules
-    return _merge(rules, llm, caption, author, post_date)
+
+    # 2e appel, dédié, pour rédiger la réponse à la vraie question (bien plus fiable qu'un seul appel « tout-en-un »)
+    if result["is_active"] and result["question"] and not result["answer"]:
+        try:
+            result["answer"] = await _llm_answer(result["question"], caption, image_b64, cfg)
+            if not result["answer"]:
+                bus.log("Réponse du modèle rejetée (copie de la légende ou hors sujet).", "warning")
+        except Exception as e:  # noqa: BLE001
+            bus.log(f"{label} : réponse à la question impossible ({e}).", "warning")
+    return result

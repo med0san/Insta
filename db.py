@@ -32,7 +32,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "ig_password": "",         # stocké en clair, uniquement si l'utilisateur coche "Mémoriser"
 }
 
-STATUSES = ("Participé", "Simulé", "Ignoré", "Erreur")
+STATUSES = ("Participé", "Partiel", "Simulé", "Ignoré", "Erreur")
 
 
 async def init_db() -> None:
@@ -53,6 +53,11 @@ async def init_db() -> None:
             )"""
         )
         await db.execute("CREATE INDEX IF NOT EXISTS idx_history_created ON history(created_at)")
+        async with db.execute("PRAGMA table_info(history)") as cur:
+            cols = {row[1] async for row in cur}
+        for col in ("caption", "actions"):          # migration des bases existantes
+            if col not in cols:
+                await db.execute(f"ALTER TABLE history ADD COLUMN {col} TEXT")
         # migration : l'alias « gemini-flash-latest » était souvent surchargé (503)
         await db.execute("UPDATE config SET value = ? WHERE key = 'api_model' AND value = ?",
                          (json.dumps("gemini-2.5-flash"), json.dumps("gemini-flash-latest")))
@@ -102,16 +107,19 @@ async def add_history(
     status: str,
     reason: str | None,
     comment: str | None = None,
+    caption: str | None = None,
+    actions: list[dict[str, Any]] | None = None,
 ) -> None:
     now = datetime.now().isoformat(timespec="seconds")
+    actions_json = json.dumps(actions, ensure_ascii=False) if actions is not None else None
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
-            """INSERT INTO history(url, account, hashtag, status, reason, comment, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?)
+            """INSERT INTO history(url, account, hashtag, status, reason, comment, created_at, caption, actions)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(url) DO UPDATE SET status = excluded.status,
                    reason = excluded.reason, comment = excluded.comment,
-                   created_at = excluded.created_at""",
-            (url, account, hashtag, status, reason, comment, now),
+                   created_at = excluded.created_at, caption = excluded.caption, actions = excluded.actions""",
+            (url, account, hashtag, status, reason, comment, now, caption, actions_json),
         )
         await db.commit()
 
@@ -122,7 +130,13 @@ async def list_history(limit: int = 300) -> list[dict[str, Any]]:
         async with db.execute(
             "SELECT * FROM history ORDER BY id DESC LIMIT ?", (limit,)
         ) as cur:
-            return [dict(row) async for row in cur]
+            rows = [dict(row) async for row in cur]
+    for r in rows:
+        try:
+            r["actions"] = json.loads(r["actions"]) if r.get("actions") else []
+        except (TypeError, ValueError):
+            r["actions"] = []
+    return rows
 
 
 async def clear_history() -> None:
@@ -131,12 +145,14 @@ async def clear_history() -> None:
         await db.commit()
 
 
-async def count_today(status: str) -> int:
+async def count_today(status: str | tuple[str, ...]) -> int:
+    statuses = (status,) if isinstance(status, str) else tuple(status)
     today = datetime.now().strftime("%Y-%m-%d")
+    marks = ",".join("?" * len(statuses))
     async with aiosqlite.connect(DB_PATH) as db:
         async with db.execute(
-            "SELECT COUNT(*) FROM history WHERE status = ? AND substr(created_at, 1, 10) = ?",
-            (status, today),
+            f"SELECT COUNT(*) FROM history WHERE status IN ({marks}) AND substr(created_at, 1, 10) = ?",
+            (*statuses, today),
         ) as cur:
             row = await cur.fetchone()
             return int(row[0]) if row else 0

@@ -131,7 +131,7 @@ class Bot:
             bus.notify("history")
 
     async def _quota_reached(self, cfg: dict[str, Any]) -> bool:
-        status = "Simulé" if cfg["dry_run"] else "Participé"
+        status = ("Simulé",) if cfg["dry_run"] else ("Participé", "Partiel")
         done = await db.count_today(status)
         return done >= int(cfg["daily_quota"])
 
@@ -179,7 +179,8 @@ class Bot:
             return False
 
         author = post["author"]
-        if not post["caption"]:
+        caption = post["caption"]
+        if not caption:
             await db.add_history(url, author, tag, "Ignoré", "Légende vide ou introuvable.")
             bus.log(f"{url} : légende introuvable, ignoré.", "warning")
             bus.notify("history")
@@ -187,142 +188,167 @@ class Bot:
 
         self._set_activity(f"Analyse @{author or '?'}")
         bus.log(f"🔍 Lecture des conditions du post de @{author or '?'} ({url})…", "ai")
+        if post.get("collaborators"):
+            bus.log("   co-auteurs : " + ", ".join("@" + c for c in post["collaborators"]), "debug")
+        if post.get("tagged"):
+            bus.log("   comptes identifiés sur la photo : " + ", ".join("@" + t for t in post["tagged"]), "debug")
         image_b64 = None
         if cfg.get("analyzer_mode") in ("ollama", "api"):
             image_b64 = await ig.fetch_image_b64(page, post.get("image_url"))
             bus.log("Image du post envoyée au modèle." if image_b64 else "Image indisponible : légende seule.", "debug")
         try:
-            result = await analyze_caption(post["caption"], author, post["post_date"], image_b64, cfg)
+            result = await analyze_caption(
+                caption, author, post["post_date"], image_b64, cfg,
+                post.get("collaborators"), post.get("tagged"),
+            )
         except AnalyzerError as e:
-            await db.add_history(url, author, tag, "Erreur", str(e))
+            await db.add_history(url, author, tag, "Erreur", str(e), caption=caption)
             bus.notify("history")
             raise
-        bus.log(
-            f"Analyse → giveaway={result['is_giveaway']} actif={result['is_active']} — {result['reason']}",
-            "ai",
-        )
+        bus.log(f"Analyse → giveaway={result['is_giveaway']} actif={result['is_active']} — {result['reason']}", "ai")
         for cond in result.get("conditions", []):
             bus.log(f"   • {cond}", "ai")
 
         if not (result["is_giveaway"] and result["is_active"]):
-            await db.add_history(url, author, tag, "Ignoré", result["reason"])
+            await db.add_history(url, author, tag, "Ignoré", result["reason"], caption=caption)
             bus.log(f"Décision : ignoré ({url})", "info")
             bus.notify("history")
             return False
 
-        if result.get("unsupported"):
-            reason = "Condition(s) impossible(s) pour le bot : " + " ; ".join(result["unsupported"]) + "."
-            if cfg.get("force_participate", True):
-                bus.log(f"⚠ {reason} Participation partielle quand même (option activée).", "warning")
-            else:
-                await db.add_history(url, author, tag, "Ignoré", reason)
-                bus.log(f"Décision : ignoré — {reason}", "warning")
-                bus.notify("history")
-                return False
+        plan = build_plan(result, cfg)
+        for note in plan["notes"]:
+            bus.log(f"⚠ {note}", "warning")
+        if plan["skip_reason"]:
+            await db.add_history(url, author, tag, "Ignoré", plan["skip_reason"], caption=caption)
+            bus.log(f"Décision : ignoré — {plan['skip_reason']}", "warning")
+            bus.notify("history")
+            return False
 
-        friends_pool = [f.strip().lstrip("@") for f in cfg["friends_to_tag"] if f.strip()]
-        needed = result["friends_count"]
-        if needed > len(friends_pool):
-            if cfg.get("force_participate", True):
-                bus.log(
-                    f"⚠ {needed} ami(s) requis mais {len(friends_pool)} configuré(s) : on identifie tous ceux dont on dispose.",
-                    "warning",
-                )
-                needed = len(friends_pool)
-            else:
-                reason = (
-                    f"{needed} ami(s) à identifier requis mais seulement {len(friends_pool)} configuré(s). "
-                    + result["reason"]
-                )
-                await db.add_history(url, author, tag, "Ignoré", reason)
-                bus.log(f"Décision : ignoré, pas assez d'amis configurés ({needed} requis).", "warning")
-                bus.notify("history")
-                return False
-
-        answer = result.get("answer")
-        if result.get("question") and not answer:
-            answer = (cfg.get("default_answer") or "").strip() or None
-            if not answer and not cfg.get("force_participate", True):
-                reason = "Une question demande une réponse personnalisée et aucune réponse par défaut n'est configurée."
-                await db.add_history(url, author, tag, "Ignoré", reason)
-                bus.log(f"Décision : ignoré — {reason}", "warning")
-                bus.notify("history")
-                return False
-            if answer:
-                bus.log(f"Question détectée, réponse par défaut utilisée : « {answer} »", "debug")
-
-        tagged = random.sample(friends_pool, needed) if needed else []
-        parts = [p for p in (result["custom_keyword"], answer) if p] + [f"@{f}" for f in tagged]
-        if not parts and result.get("needs_comment"):
-            parts = [GENERIC_COMMENT]
-        comment = " ".join(parts) if parts else None
-        follows = result["accounts_to_follow"]
-        save = bool(result.get("needs_save"))
-        story = bool(result.get("needs_story")) and bool(cfg.get("do_story", True))
+        reason = result["reason"] + ("" if not plan["notes"] else " ⚠ " + " ; ".join(plan["notes"]))
+        comment = plan["comment"]
 
         if cfg["dry_run"]:
-            bus.log(f"🧪 [DRY-RUN] Aurait liké : {url}", "action")
-            if save:
-                bus.log("🧪 [DRY-RUN] Aurait enregistré le post", "action")
-            for acc in follows:
-                bus.log(f"🧪 [DRY-RUN] Aurait suivi : @{acc}", "action")
-            if comment:
-                bus.log(f"🧪 [DRY-RUN] Aurait commenté : « {comment} »", "action")
-            if story:
-                bus.log("🧪 [DRY-RUN] Aurait republié / mis en story", "action")
-            await db.add_history(url, author, tag, "Simulé", result["reason"], comment)
+            report = [{"action": a, "ok": None, "detail": "simulé"} for a in plan["steps"]]
+            for a in plan["steps"]:
+                bus.log(f"🧪 [DRY-RUN] Aurait fait : {a}", "action")
+            await db.add_history(url, author, tag, "Simulé", reason, comment, caption=caption, actions=report)
             bus.notify("history")
             bus.notify("status")
             return True
 
-        # ---- mode réel ----
+        # ---- mode réel : chaque action est indépendante, un échec n'annule pas les suivantes ----
         self._set_activity(f"Participation @{author or '?'}")
-        try:
-            r = await ig.like_post(page)
-            bus.log(f"❤️ Post {r} : {url}", "action")
-            await self._sleep(*self._pace(cfg)[0])
-            if save:
-                r = await ig.save_post(page)
-                bus.log(f"🔖 Post {r}", "action")
-                await self._sleep(*self._pace(cfg)[0])
-            for acc in follows:
-                self._check_stop()
-                r = await ig.follow_account(page, acc)
-                bus.log(f"➕ @{acc} : {r}", "action")
-                await self._sleep(*self._pace(cfg)[0])
-            if comment:
-                await ig.post_comment(page, url, comment)
-                bus.log(f"💬 Commentaire publié : « {comment} »", "action")
-                await self._sleep(*self._pace(cfg)[0])
-            if story:
-                try:
-                    if page.url.rstrip("/") != url.rstrip("/"):
-                        await page.goto(url, wait_until="domcontentloaded")
-                        await ig.human_delay(2, 4)
-                    r = await ig.share_to_story(page)
-                    bus.log(f"📲 Story / republication : {r}", "action")
-                except (ig.InstagramBlocked, ig.SessionExpired, StopBot):
-                    raise
-                except Exception as e:
-                    bus.log(f"Story / republication impossible : {e} (participation conservée).", "warning")
-        except (ig.InstagramBlocked, ig.SessionExpired):
-            await db.add_history(url, author, tag, "Erreur", "Action bloquée par Instagram.", comment)
-            bus.notify("history")
-            raise
-        except StopBot:
-            await db.add_history(url, author, tag, "Erreur", "Participation interrompue (arrêt).", comment)
-            bus.notify("history")
-            raise
-        except Exception as e:
-            await db.add_history(url, author, tag, "Erreur", f"Action échouée : {e}", comment)
-            bus.log(f"Participation échouée sur {url} : {e}", "error")
-            bus.notify("history")
-            return False
+        report: list[dict[str, Any]] = []
+        pace = self._pace(cfg)[0]
 
-        await db.add_history(url, author, tag, "Participé", result["reason"], comment)
-        bus.log(f"✅ Participation enregistrée pour {url}", "success")
+        async def act(label: str, coro_factory) -> None:
+            try:
+                detail = await coro_factory()
+                report.append({"action": label, "ok": True, "detail": str(detail)})
+                bus.log(f"✓ {label} : {detail}", "action")
+            except (ig.InstagramBlocked, ig.SessionExpired, StopBot, asyncio.CancelledError):
+                report.append({"action": label, "ok": False, "detail": "interrompu"})
+                raise
+            except Exception as e:  # noqa: BLE001
+                report.append({"action": label, "ok": False, "detail": str(e)[:200]})
+                bus.log(f"✗ {label} : {e}", "error")
+            await self._sleep(*pace)
+
+        async def on_post():
+            if page.url.rstrip("/") != url.rstrip("/"):
+                await page.goto(url, wait_until="domcontentloaded")
+                await ig.human_delay(2, 4)
+
+        async def do_story():
+            await on_post()
+            r = await ig.share_to_story(page)
+            if r.startswith("republié") and ig.last_share_options:
+                bus.log("   menu « Partager » proposait : " + " | ".join(ig.last_share_options), "debug")
+            return r
+
+        try:
+            await act("liker", lambda: ig.like_post(page))
+            if plan["save"]:
+                await act("enregistrer le post", lambda: ig.save_post(page))
+            if comment:
+                await act(f"commenter « {comment} »", lambda: ig.post_comment(page, url, comment))
+            if plan["story"]:
+                await act("republier / mettre en story", do_story)
+            for acc in plan["follows"]:
+                self._check_stop()
+                await act(f"suivre @{acc}", lambda acc=acc: ig.follow_account(page, acc))
+        except (ig.InstagramBlocked, ig.SessionExpired, StopBot) as e:
+            msg = "Participation interrompue (arrêt)." if isinstance(e, StopBot) else "Action bloquée par Instagram."
+            await db.add_history(url, author, tag, "Erreur", msg, comment, caption=caption, actions=report)
+            bus.notify("history")
+            raise
+
+        ok = sum(1 for r in report if r["ok"])
+        failed = [r["action"] for r in report if not r["ok"]]
+        status = "Participé" if not failed else ("Partiel" if ok else "Erreur")
+        if failed:
+            reason += f" ✗ Échec : {', '.join(failed)}."
+        await db.add_history(url, author, tag, status, reason, comment, caption=caption, actions=report)
+        bus.log(
+            f"{'✅' if status == 'Participé' else '⚠'} {status} ({ok}/{len(report)} actions réussies) : {url}",
+            "success" if status == "Participé" else "warning",
+        )
         bus.notify("history")
         bus.notify("status")
-        return True
+        return status != "Erreur"
+
+
+def build_plan(result: dict[str, Any], cfg: dict[str, Any], rng: random.Random | None = None) -> dict[str, Any]:
+    """Transforme l'analyse en liste exacte d'actions (utilisé par le bot et par « Tester une légende »)."""
+    rng = rng or random.Random()
+    force = bool(cfg.get("force_participate", True))
+    notes: list[str] = []
+    skip: str | None = None
+
+    if result.get("unsupported"):
+        txt = "Condition(s) impossible(s) pour le bot : " + " ; ".join(result["unsupported"])
+        if force:
+            notes.append(txt + " → participation partielle")
+        else:
+            skip = txt + "."
+
+    pool = [f.strip().lstrip("@") for f in cfg.get("friends_to_tag", []) if f.strip()]
+    needed = int(result.get("friends_count") or 0)
+    if needed > len(pool):
+        if force:
+            notes.append(f"{needed} ami(s) requis mais {len(pool)} configuré(s) : tous ceux disponibles sont identifiés")
+            needed = len(pool)
+        else:
+            skip = skip or f"{needed} ami(s) à identifier requis mais seulement {len(pool)} configuré(s)."
+
+    answer = result.get("answer")
+    if result.get("question") and not answer:
+        answer = (cfg.get("default_answer") or "").strip() or None
+        if answer:
+            notes.append(f"réponse par défaut utilisée pour : « {result['question']} »")
+        elif not force:
+            skip = skip or "Une question demande une réponse et aucune réponse par défaut n'est configurée."
+
+    friends = rng.sample(pool, needed) if needed else []
+    parts = [p for p in (result.get("custom_keyword"), answer) if p] + [f"@{f}" for f in friends]
+    if not parts and result.get("needs_comment"):
+        parts = [GENERIC_COMMENT]
+    comment = " ".join(parts) if parts else None
+    story = bool(result.get("needs_story")) and bool(cfg.get("do_story", True))
+    follows = list(result.get("accounts_to_follow") or [])
+    save = bool(result.get("needs_save"))
+
+    steps = ["liker"]
+    if save:
+        steps.append("enregistrer le post")
+    if comment:
+        steps.append(f"commenter « {comment} »")
+    if story:
+        steps.append("republier / mettre en story")
+    steps += [f"suivre @{a}" for a in follows]
+    return {
+        "follows": follows, "save": save, "story": story, "comment": comment,
+        "answer": answer, "friends": friends, "steps": steps, "notes": notes, "skip_reason": skip,
+    }
 
 bot = Bot()

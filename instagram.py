@@ -377,7 +377,66 @@ async def read_post(page: Page, url: str) -> dict[str, Any]:
         except Exception:
             pass
 
-    return {"caption": caption, "author": author, "post_date": post_date, "image_url": image_url}
+    collaborators = [c for c in await _header_accounts(page) if not author or c.lower() != author.lower()]
+    tagged = await _tagged_accounts(page)
+    return {
+        "caption": caption,
+        "author": author,
+        "post_date": post_date,
+        "image_url": image_url,
+        "collaborators": collaborators,
+        "tagged": tagged,
+    }
+
+
+def _handles_from_hrefs(hrefs: list[str | None]) -> list[str]:
+    out: list[str] = []
+    for h in hrefs:
+        parts = [x for x in (h or "").split("?")[0].strip("/").split("/") if x]
+        if len(parts) == 1 and parts[0].lower() not in RESERVED_PATHS and HANDLE_RE.match(parts[0]):
+            if parts[0].lower() not in {o.lower() for o in out}:
+                out.append(parts[0])
+    return out
+
+
+async def _profile_links(page: Page, selector: str, visible_only: bool = False) -> list[str]:
+    js = (
+        "els => els.filter(e => e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden')"
+        ".map(e => e.getAttribute('href'))"
+        if visible_only else "els => els.map(e => e.getAttribute('href'))"
+    )
+    try:
+        hrefs = await page.eval_on_selector_all(selector, js)
+    except Exception:
+        return []
+    return _handles_from_hrefs(hrefs)
+
+
+async def _header_accounts(page: Page) -> list[str]:
+    """Auteur + co-auteurs (post en collaboration « compte1 et compte2 »)."""
+    return (await _profile_links(page, "article header a[href^='/'], main header a[href^='/']"))[:4]
+
+
+TAGS_BTN_SEL = (
+    'svg[aria-label="Tags"], svg[aria-label="Tag"], svg[aria-label="Identifications"], '
+    'svg[aria-label="Identification"], svg[aria-label="Personnes identifiées"], svg[aria-label="Tagged people"]'
+)
+
+
+async def _tagged_accounts(page: Page) -> list[str]:
+    """Comptes identifiés sur la photo : on affiche les identifications et on relève les nouveaux liens de profil."""
+    try:
+        btn = page.locator(TAGS_BTN_SEL).first
+        if not await btn.is_visible(timeout=1200):
+            return []
+        # liens visibles avant / après l'affichage des identifications (ils peuvent exister cachés dans la page)
+        before = set(h.lower() for h in await _profile_links(page, "a[href^='/']", visible_only=True))
+        await btn.click()
+        await asyncio.sleep(1.2)
+        after = await _profile_links(page, "a[href^='/']", visible_only=True)
+        return [h for h in after if h.lower() not in before][:15]
+    except Exception:
+        return []
 
 
 HANDLE_RE = re.compile(r"^[A-Za-z0-9._]{1,30}$")
@@ -482,11 +541,8 @@ SHARE_SEL = (
     'svg[aria-label="Share"], svg[aria-label="Share Post"], svg[aria-label="Partager"], '
     'svg[aria-label="Partager la publication"], svg[aria-label="Send"], svg[aria-label="Envoyer"]'
 )
-STORY_ITEM_RE = re.compile(
-    r"(Add (?:post |this post )?to (?:your )?story|Share to (?:your )?story|"
-    r"Ajouter (?:la publication |ce post )?à (?:votre|ta) story|Partager (?:dans|en) (?:votre|ta) story)",
-    re.I,
-)
+STORY_ITEM_RE = re.compile(r"((?:add|share|post)\b.{0,25}\bstor(?:y|ies)|(?:ajouter|partager|publier)\b.{0,30}\bstory)", re.I)
+last_share_options: list[str] = []   # textes vus dans le menu « Partager » (diagnostic affiché dans les logs)
 
 
 async def share_to_story(page: Page) -> str:
@@ -496,6 +552,14 @@ async def share_to_story(page: Page) -> str:
         await share.wait_for(state="visible", timeout=6000)
         await share.click()
         await asyncio.sleep(2)
+        global last_share_options
+        try:
+            last_share_options = [
+                t.strip() for t in await page.locator('[role="dialog"] [role="button"], [role="dialog"] button, [role="dialog"] span')
+                .all_inner_texts() if 2 < len(t.strip()) < 40
+            ][:20]
+        except Exception:
+            last_share_options = []
         item = page.get_by_text(STORY_ITEM_RE).first
         if await item.is_visible(timeout=3000):
             await item.click()

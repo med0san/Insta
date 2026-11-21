@@ -14,8 +14,8 @@ from pydantic import BaseModel, Field
 import db
 import instagram as ig
 from auth import auth
-from analyzer import api_status, ollama_status
-from bot import bot
+from analyzer import analyze_caption, api_status, ollama_status
+from bot import bot, build_plan
 from logbus import bus
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -65,6 +65,12 @@ class LoginIn(BaseModel):
     remember: bool = False
 
 
+class AnalyzeIn(BaseModel):
+    caption: str = Field(min_length=1, max_length=5000)
+    author: str | None = Field(default=None, max_length=60)
+    post_date: str | None = Field(default=None, max_length=40)
+
+
 class TwoFAIn(BaseModel):
     code: str
 
@@ -96,12 +102,12 @@ async def index():
 @app.get("/api/status")
 async def status():
     cfg = await db.get_config()
-    mode_status = "Simulé" if cfg["dry_run"] else "Participé"
+    mode_status = ("Simulé",) if cfg["dry_run"] else ("Participé", "Partiel")
     return {
         "bot": bot.snapshot(),
         "session": auth.snapshot(),
         "today": await db.count_today(mode_status),
-        "today_real": await db.count_today("Participé"),
+        "today_real": await db.count_today(("Participé", "Partiel")),
         "today_simulated": await db.count_today("Simulé"),
         "quota": cfg["daily_quota"],
         "dry_run": cfg["dry_run"],
@@ -135,6 +141,17 @@ async def analyzer_status():
     if cfg["analyzer_mode"] == "ollama":
         return await asyncio.to_thread(ollama_status, cfg["ollama_url"], cfg["ollama_model"])
     return {"ok": True, "message": "Analyse par règles (gratuite, hors ligne)."}
+
+
+@app.post("/api/analyze")
+async def analyze_preview(body: AnalyzeIn):
+    """Analyse une légende collée par l'utilisateur et montre exactement ce que le bot ferait (rien n'est exécuté)."""
+    cfg = await db.get_config()
+    author = (body.author or "").strip().lstrip("@") or None
+    result = await analyze_caption(body.caption, author, body.post_date, None, cfg)
+    plan = build_plan(result, cfg) if result["is_giveaway"] and result["is_active"] else None
+    public = {k: v for k, v in result.items() if not k.startswith("_")}
+    return {"result": public, "plan": plan, "mode": cfg.get("analyzer_mode", "rules")}
 
 
 @app.post("/api/session/check")
