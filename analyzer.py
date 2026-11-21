@@ -144,8 +144,15 @@ TAGGED_RE = re.compile(
 EXPLICIT_ASK_RE = re.compile(
     r"(\b(?:dis|dites)[- ](?:moi|nous)\b|\b(?:me|nous) (?:dire|disant)\b|\bdire[- ](?:moi|nous)\b|\btell (?:me|us)\b|"
     r"\braconte\w*|\breponds?\b|\brepondez\b|\brepondre\b|\bexplique\w*|\banswer\b|"
-    r"en commentaire[^.!?\n]{0,60}\b(?:quel\w*|qui|pourquoi|ce que|ton|ta|tes|votre|vos)\b)"
+    r"en commentaire[^.!?\n]{0,60}\b(?:quel\w*|qui|pourquoi|ce que)\b)"
 )
+# Un verbe de demande n'est une vraie consigne que si on parle d'un COMMENTAIRE, ou s'il porte sur une question
+# adressée au participant (« dis-moi quel cadeau te fait envie »). « venir nous dire bonjour », « répondre à vos
+# besoins » ne demandent rien en commentaire.
+COMMENT_CTX_RE = re.compile(
+    r"\b(commentaires?|commente\w*|comments?|sous (?:ce|cette|ma|mon|le|la)|ci[- ]dessous|below|en reponse|reponse)\b"
+)
+YOU_RE = re.compile(r"\b(te|tu|toi|ton|ta|tes|vous|votre|vos|you|your)\b")
 WH_RE = re.compile(r"\b(quel\w*|lequel|laquelle|lesquel\w*|pourquoi|combien|avec qui|which|what|why|who)\b")
 HOOK_RE = re.compile(
     r"^(?:et )?(envie|tu veux|vous voulez|ca te dit|ca vous dit|qui veut|qui a envie|pret|prete|prets|pretes|alors|"
@@ -181,21 +188,39 @@ def _parse_post_date(value: str | None) -> date | None:
         return None
 
 
+MAX_AHEAD = timedelta(days=120)   # un concours dure rarement plus de 4 mois : au-delà, l'année est une faute de frappe
+
+
 def _build_date(day: int, month: int, year: int | None, ref: date) -> date | None:
-    explicit = year is not None
+    """Date de fin plausible, ou None. Sans année : la prochaine occurrence. Avec une année invraisemblable
+    (« 13/12/2027 » pour un post de novembre 2026), on corrige vers l'année voisine plausible ou on l'écarte."""
+    horizon = max(ref, date.today()) + MAX_AHEAD
+    earliest = ref - timedelta(days=7)
     if year is not None and year < 100:
         year += 2000
-    y = year or ref.year
-    try:
-        d = date(y, month, day)
-    except ValueError:
-        return None
-    if not explicit and d < ref - timedelta(days=7):
+
+    def make(y: int) -> date | None:
         try:
-            d = date(y + 1, month, day)  # "jusqu'au 5 janvier" publié en décembre
+            return date(y, month, day)
         except ValueError:
             return None
-    return d
+
+    if year is None:
+        for y in (ref.year, ref.year + 1):          # « jusqu'au 5 janvier » publié en décembre → année suivante
+            d = make(y)
+            if d and d >= earliest:
+                return d if d <= horizon else None
+        return None
+    d = make(year)
+    if d is None:
+        return None
+    if d <= horizon:
+        return d                                    # passé (concours expiré) ou futur proche : on garde
+    for y in (year - 1, year - 2):                  # trop loin dans le futur : année mal écrite
+        alt = make(y)
+        if alt and earliest <= alt <= horizon:
+            return alt
+    return None
 
 
 def _find_end_date(norm: str, ref: date) -> tuple[date, str] | None:
@@ -310,13 +335,16 @@ def _words(text: str) -> list[str]:
 
 
 def _is_real_question(sentence: str) -> bool:
-    """Vraie question à laquelle répondre en commentaire (pas un slogan rhétorique)."""
+    """Vraie question à laquelle répondre en commentaire (pas un slogan, ni une phrase de présentation)."""
     ns = re.sub(r"^[^\w]+", "", _norm(sentence))
     if EXPLICIT_ASK_RE.search(ns):
-        return True
+        return bool(COMMENT_CTX_RE.search(ns)) or bool(WH_RE.search(ns) and YOU_RE.search(ns))
     if "?" not in sentence or HOOK_RE.match(ns) or WIN_RE.search(ns):
         return False
-    return bool(WH_RE.search(ns)) or " ou " in ns
+    if WH_RE.search(ns) and YOU_RE.search(ns):          # « Quel est ton parfum préféré ? »
+        return True
+    # question à choix courte (« Team chat ou chien ? ») ; une longue phrase d'accroche avec « ou » n'en est pas une
+    return " ou " in ns and len(ns.split()) <= 9 and not re.search(r"\benvie\b|plaisir|\bfetes?\b|\bnoel\b", ns)
 
 
 def _quote_in_caption(quote: str, caption: str) -> bool:
