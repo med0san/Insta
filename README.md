@@ -144,8 +144,12 @@ ne permet pas. Il continue donc de tourner sur le PC. L'application Android (`an
    Python sur le réseau privé : acceptez.
 2. Sur le téléphone (même Wi-Fi) : installez `GiveawayBot.apk` (autoriser « sources inconnues »), entrez l'adresse
    `192.168.x.x:8000`, puis le mot de passe. Le menu ⋮ permet de changer l'adresse.
-3. Hors de chez vous : installez [Tailscale](https://tailscale.com) (gratuit) sur le PC et le téléphone, puis utilisez
-   l'adresse Tailscale du PC. N'exposez jamais le port 8000 directement sur Internet.
+3. **Téléphone en 4G (ou sur un autre réseau que le PC) : Tailscale est obligatoire.** Une adresse `192.168.x.x`
+   ne marche que sur le même Wi-Fi. Installez [Tailscale](https://tailscale.com) (gratuit) sur le PC **et** sur le
+   téléphone (Play Store), connectez les deux au même compte, puis saisissez dans l'appli l'adresse `100.x.x.x:8000`
+   (affichée par `run-mobile.bat` ou dans l'application Tailscale). Ça marche partout, même PC en Ethernet et
+   téléphone en 4G. N'exposez jamais le port 8000 directement sur Internet.
+   **Ne saisissez jamais `0.0.0.0`** : c'est le mode d'écoute du serveur, pas une adresse (l'appli le refuse).
 
 Sécurité : dès que le serveur écoute sur le réseau (`BOT_HOST=0.0.0.0`), un **mot de passe est obligatoire** (le serveur
 refuse de démarrer sinon) ; 8 essais ratés bloquent l'IP 15 minutes. Le trafic est en http sur votre réseau local.
