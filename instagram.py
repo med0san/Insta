@@ -676,6 +676,14 @@ async def share_to_story(page: Page) -> str:
 
 
 REPOST_ITEM_RE = re.compile(r"^(Repost|Republier|Republication)$", re.I)
+THOUGHT_RE = re.compile(r"(Add a thought|Ajouter une pensée|Ajouter une idée|Partager une pensée|Share a thought)", re.I)
+_HTML_JS = """
+(attr) => {
+  const el = document.querySelector('[' + attr + '="1"]');
+  const b = el && (el.closest('[role="button"], button') || el);
+  return b ? b.outerHTML.replace(/aria-expanded="[^"]*"/g, '').replace(/\\s+/g, ' ') : null;
+}
+"""
 REPOST_TOAST_RE = re.compile(r"(Reposted|Republié|Republiée|Republication (?:ajoutée|effectuée)|Vous avez republié)", re.I)
 
 _COUNT_JS = """
@@ -712,6 +720,7 @@ async def _repost_marker(page: Page) -> tuple[str | None, str | None]:
 async def repost_post(page: Page, via_story_note: bool = False) -> str:
     """Republie le post (bouton ↻) : ouvre le menu, choisit « Republier », puis VÉRIFIE l'effet."""
     state, before = await _repost_marker(page)
+    html_before = await page.evaluate(_HTML_JS, _ATTR) if state else None
     if state is None:
         raise RuntimeError(f"bouton de republication introuvable (icônes visibles : {await _icons_seen(page)})")
     if _is_one_of(state, REPOSTED_LABELS):
@@ -745,6 +754,15 @@ async def repost_post(page: Page, via_story_note: bool = False) -> str:
         new_state, after = await _repost_marker(page)
         if new_state is not None and (_is_one_of(new_state, REPOSTED_LABELS) or _lab(new_state) != _lab(state)):
             return "republié (vérifié)" + (" — la story directe n'est pas proposée sur Instagram web" if via_story_note else "")
+        if menu_seen:
+            try:
+                html_after = await page.evaluate(_HTML_JS, _ATTR)
+                if html_after and html_before and html_after != html_before:
+                    return "republié (vérifié : l'icône a changé d'état)"
+                if await page.get_by_text(THOUGHT_RE).first.is_visible(timeout=300):
+                    return "republié (vérifié : votre republication apparaît sur le post)"
+            except Exception:
+                pass
         b, a = _to_int(before), _to_int(after)
         if b is not None and a is not None and a > b:
             return "republié (vérifié : compteur +1)" + (" — story directe indisponible sur le web" if via_story_note else "")
