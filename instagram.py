@@ -24,15 +24,15 @@ SESSION_DIR = BASE_DIR / "ig_session"
 IG = "https://www.instagram.com"
 
 BLOCK_PATTERNS = [
-    "action blocked",
-    "action bloquée",
-    "try again later",
-    "réessayez plus tard",
-    "we restrict certain activity",
-    "nous limitons certaines activités",
-    "your account has been temporarily",
-    "votre compte a été temporairement",
+    # comparés sans accents ni majuscules
+    "action blocked", "action bloquee", "action bloque",
+    "try again later", "reessayez plus tard", "reessayer plus tard",
+    "we limit how often", "limit how often", "limitons la frequence", "limitons certaines",
+    "we restrict certain activity", "nous limitons certaines activites",
+    "temporarily blocked", "temporairement bloque", "your account has been temporarily", "votre compte a ete temporairement",
+    "suspicious activity", "activite suspecte",
 ]
+FREQUENCY_LIMIT_MARKERS = ("limit how often", "limitons la frequence", "limitons certaines", "we restrict certain")
 
 
 class BrowserBusy(RuntimeError):
@@ -290,9 +290,15 @@ def normalize_post_url(href: str) -> str | None:
     return f"{IG}/{m.group(1)}/{m.group(2)}/"
 
 
+def _plain(text: str) -> str:
+    import unicodedata
+    text = text.replace("’", "'").lower()
+    return "".join(c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c) != "Mn")
+
+
 async def check_blocked(page: Page) -> None:
     try:
-        text = (await page.locator("body").inner_text(timeout=4000)).lower()
+        text = _plain(await page.locator("body").inner_text(timeout=4000))
     except Exception:
         return
     for pat in BLOCK_PATTERNS:

@@ -173,6 +173,13 @@ concours actifs en file d'attente, les **classe**, puis participe du plus au moi
   un autre qui finit demain), *Échéance d'abord*, *Gaming / PC d'abord*, ou *ordre d'arrivée*.
 - Le classement et le score de chaque concours sont affichés dans les logs et dans « Tester une légende ».
 
+## Limite d'Instagram : « Réessayer plus tard »
+
+Message d'Instagram : « nous limitons la fréquence de certaines actions… comme suivre des comptes ». Le bot le détecte
+(français et anglais), s'arrête aussitôt et **attend 12 h** avant de reprendre (2 h pour un autre type de blocage ; arrêt
+définitif au 3e blocage en 24 h). Pour l'éviter, un **budget d'abonnements** (30/heure et 200/jour par défaut, réglable)
+fait attendre le bot avant la limite. **Quand ce message apparaît, ne suivez aucun compte à la main pendant 24 h.**
+
 ## Fiabilité des actions
 
 Chaque action est **vérifiée** avant d'être annoncée comme réussie, sinon elle apparaît en ✗ avec la raison :

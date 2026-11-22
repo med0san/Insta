@@ -190,6 +190,15 @@
                 <label class="text-xs text-mute" for="cooldownNum">Pause après un « Action bloquée » <span class="text-neutral-500">(min)</span></label>
                 <input id="cooldownNum" type="number" min="10" max="1440" class="input !w-24 !py-1 text-right font-mono" />
               </div>
+              <div class="flex items-center justify-between gap-3">
+                <label class="text-xs text-mute" for="folHour">Abonnements max par heure <span class="text-neutral-500">(0 = illimité)</span></label>
+                <input id="folHour" type="number" min="0" class="input !w-24 !py-1 text-right font-mono" />
+              </div>
+              <div class="flex items-center justify-between gap-3">
+                <label class="text-xs text-mute" for="folDay">Abonnements max par jour <span class="text-neutral-500">(0 = illimité)</span></label>
+                <input id="folDay" type="number" min="0" class="input !w-24 !py-1 text-right font-mono" />
+              </div>
+              <p class="text-xs text-mute leading-relaxed">Instagram limite surtout les « suivre » : au-delà du budget, le bot attend au lieu de se faire bloquer.</p>
               <p class="text-xs text-mute leading-relaxed">Les erreurs sont absorbées (navigateur relancé), le PC ne se met pas en veille et le bot reprend seul après un blocage ou un redémarrage du serveur. Il s'arrête au 3<sup>e</sup> blocage en 24 h.</p>
             </div>
 
@@ -412,9 +421,9 @@ function scheduleSave(patch) {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     try {
-      const { friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag, analyzer_mode, ollama_model, default_answer, api_base_url, api_model, do_story, force_participate, speed, block_cooldown_min, priority_mode, priority_keywords } = config;
+      const { friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag, analyzer_mode, ollama_model, default_answer, api_base_url, api_model, do_story, force_participate, speed, block_cooldown_min, priority_mode, priority_keywords, max_follows_per_hour, max_follows_per_day } = config;
       const api_key = config.api_key || undefined;
-      const saved = await api('/api/config', { method: 'PUT', body: JSON.stringify({ friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag, analyzer_mode, ollama_model, default_answer, api_base_url, api_model, api_key, do_story, force_participate, speed, block_cooldown_min, priority_mode, priority_keywords }) });
+      const saved = await api('/api/config', { method: 'PUT', body: JSON.stringify({ friends_to_tag, hashtags, daily_quota, dry_run, headless, posts_per_hashtag, analyzer_mode, ollama_model, default_answer, api_base_url, api_model, api_key, do_story, force_participate, speed, block_cooldown_min, priority_mode, priority_keywords, max_follows_per_hour, max_follows_per_day }) });
       config = { ...config, ...saved }; delete config.api_key; if (api_key) $('#apiKey').value = '';
       renderConfig();
       $('#saveState').textContent = 'Enregistré ✓';
@@ -442,6 +451,8 @@ function setSwitch(el, v) { el.setAttribute('aria-checked', v ? 'true' : 'false'
 function renderConfig() {
   renderChips($('#friendChips'), config.friends_to_tag, '@', 'friends_to_tag');
   renderChips($('#tagChips'), config.hashtags, '#', 'hashtags');
+  if (document.activeElement !== $('#folHour')) $('#folHour').value = config.max_follows_per_hour ?? 30;
+  if (document.activeElement !== $('#folDay')) $('#folDay').value = config.max_follows_per_day ?? 200;
   if (document.activeElement !== $('#cooldownNum')) $('#cooldownNum').value = config.block_cooldown_min ?? 120;
   if (document.activeElement !== $('#quotaNum')) $('#quotaNum').value = config.daily_quota ?? 0;
   $('#pphRange').value = config.posts_per_hashtag; $('#pphVal').textContent = config.posts_per_hashtag;
@@ -480,6 +491,8 @@ $('#friendInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.
 $('#friendAdd').onclick = () => addItems($('#friendInput'), 'friends_to_tag', '@');
 $('#tagInput').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addItems(e.target, 'hashtags', '#'); } });
 $('#tagAdd').onclick = () => addItems($('#tagInput'), 'hashtags', '#');
+$('#folHour').onchange = e => { const v = Math.max(0, Math.floor(+e.target.value || 0)); e.target.value = v; scheduleSave({ max_follows_per_hour: v }); };
+$('#folDay').onchange = e => { const v = Math.max(0, Math.floor(+e.target.value || 0)); e.target.value = v; scheduleSave({ max_follows_per_day: v }); };
 $('#cooldownNum').onchange = e => { const v = Math.max(10, Math.min(1440, +e.target.value || 120)); e.target.value = v; scheduleSave({ block_cooldown_min: v }); };
 $('#quotaNum').onchange = e => { const v = Math.max(0, Math.floor(+e.target.value || 0)); e.target.value = v; scheduleSave({ daily_quota: v }); renderConfig(); };
 $('#pphRange').oninput = e => { $('#pphVal').textContent = e.target.value; scheduleSave({ posts_per_hashtag: +e.target.value }); };

@@ -105,6 +105,9 @@ class ConfigIn(BaseModel):
     headless: bool | None = None
     posts_per_hashtag: int | None = Field(default=None, ge=1, le=200)
     block_cooldown_min: int | None = Field(default=None, ge=10, le=1440)
+    max_follows_per_hour: int | None = Field(default=None, ge=0, le=500)
+    max_follows_per_day: int | None = Field(default=None, ge=0, le=5000)
+    follow_block_cooldown_h: int | None = Field(default=None, ge=1, le=72)
     priority_mode: Literal["off", "deadline", "balanced", "gaming"] | None = None
     priority_keywords: list[str] | None = None
     do_story: bool | None = None

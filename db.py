@@ -25,6 +25,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "block_cooldown_min": 120, # pause (minutes) après un « Action bloquée », puis reprise automatique
     "priority_mode": "balanced",  # off | deadline | balanced | gaming  (voir priority.py)
     "priority_keywords": [],      # vide = liste par défaut PS5 / PC / jeux vidéo
+    "max_follows_per_hour": 30,   # budget d'abonnements (0 = illimité) : Instagram limite surtout les « suivre »
+    "max_follows_per_day": 200,
+    "follow_block_cooldown_h": 12,  # pause après « nous limitons la fréquence de certaines actions »
     "do_story": True,          # republier / mettre en story quand le concours le demande
     "force_participate": True, # participer même si une condition est impossible (participation partielle)
     "speed": "human",          # "human" (3-9 s / 45-120 s) ou "fast" (1,5-4 s / 10-25 s)
@@ -57,6 +60,7 @@ async def init_db() -> None:
             )"""
         )
         await db.execute("CREATE INDEX IF NOT EXISTS idx_history_created ON history(created_at)")
+        await db.execute("CREATE TABLE IF NOT EXISTS follow_log (ts REAL NOT NULL)")
         await db.execute(
             """CREATE TABLE IF NOT EXISTS candidates (
                 url TEXT PRIMARY KEY,
@@ -151,6 +155,22 @@ async def purge_candidates(max_age_days: int = 3) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("DELETE FROM candidates WHERE created_at < ?", (limit,))
         await db.commit()
+
+
+async def log_follow() -> None:
+    import time
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("INSERT INTO follow_log(ts) VALUES (?)", (time.time(),))
+        await db.execute("DELETE FROM follow_log WHERE ts < ?", (time.time() - 3 * 86400,))
+        await db.commit()
+
+
+async def follow_window(seconds: int) -> list[float]:
+    """Horodatages des abonnements faits dans les `seconds` dernières secondes (plus ancien d'abord)."""
+    import time
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute("SELECT ts FROM follow_log WHERE ts > ? ORDER BY ts", (time.time() - seconds,)) as cur:
+            return [row[0] async for row in cur]
 
 
 async def url_known(url: str) -> bool:

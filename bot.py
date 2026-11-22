@@ -195,6 +195,10 @@ class Bot:
         if len(self.blocks) >= MAX_BLOCKS_24H:
             raise FatalStop(f"{len(self.blocks)} blocages Instagram en 24 h : arrêt pour ne pas aggraver la restriction.")
         minutes = max(10, int(cfg.get("block_cooldown_min") or BLOCK_COOLDOWN_MIN))
+        if any(m in str(err) for m in ig.FREQUENCY_LIMIT_MARKERS):
+            # « Nous limitons la fréquence de certaines actions (comme suivre des comptes) » : ce blocage dure en général
+            # bien plus de 2 h ; reprendre trop tôt le prolonge. Pause longue.
+            minutes = max(minutes, int(cfg.get("follow_block_cooldown_h") or 12) * 60)
         bus.log(
             f"⛔ ACTION BLOQUÉE ({err}) — blocage {len(self.blocks)}/{MAX_BLOCKS_24H} en 24 h. "
             f"Pause de {minutes} min puis reprise automatique vers {_clock(now + minutes * 60)}.",
@@ -202,6 +206,22 @@ class Bot:
         )
         self._set_activity(f"Blocage Instagram — reprise vers {_clock(now + minutes * 60)}")
         await self._sleep_for(minutes * 60)
+
+    async def _follow_budget(self, cfg: dict[str, Any]) -> None:
+        """Attend si le budget d'abonnements (par heure / par jour) est épuisé : mieux vaut attendre que se faire bloquer."""
+        for seconds, key, label in ((3600, "max_follows_per_hour", "heure"), (86400, "max_follows_per_day", "jour")):
+            limit = int(cfg.get(key) or 0)
+            if limit <= 0:
+                continue
+            done = await db.follow_window(seconds)
+            if len(done) >= limit:
+                wait = done[len(done) - limit] + seconds - time.time() + random.uniform(20, 90)
+                bus.log(
+                    f"Budget d'abonnements atteint ({limit}/{label}) : pause de {max(1, int(wait // 60))} min pour ne pas "
+                    "déclencher la limite d'Instagram.", "warning",
+                )
+                self._set_activity(f"Pause abonnements — reprise vers {_clock(time.time() + wait)}")
+                await self._sleep_for(max(5.0, wait))
 
     async def _quota_reached(self, cfg: dict[str, Any]) -> bool:
         quota = int(cfg.get("daily_quota") or 0)
@@ -413,7 +433,8 @@ class Bot:
         report: list[dict[str, Any]] = []
         pace = self._pace(cfg)[0]
 
-        async def act(label: str, coro_factory) -> None:
+        async def act(label: str, coro_factory) -> str | None:
+            detail = None
             try:
                 detail = await coro_factory()
                 report.append({"action": label, "ok": True, "detail": str(detail)})
@@ -425,6 +446,7 @@ class Bot:
                 report.append({"action": label, "ok": False, "detail": str(e)[:200]})
                 bus.log(f"✗ {label} : {e}", "error")
             await self._sleep(*pace)
+            return str(detail) if detail is not None else None
 
         async def on_post():
             if page.url.rstrip("/") != url.rstrip("/"):
@@ -447,7 +469,10 @@ class Bot:
                 await act("republier / mettre en story", do_story)
             for acc in plan["follows"]:
                 self._check_stop()
-                await act(f"suivre @{acc}", lambda acc=acc: ig.follow_account(page, acc))
+                await self._follow_budget(cfg)
+                res = await act(f"suivre @{acc}", lambda acc=acc: ig.follow_account(page, acc))
+                if res and "déjà" not in res:
+                    await db.log_follow()
         except (ig.InstagramBlocked, ig.SessionExpired, StopBot) as e:
             msg = "Participation interrompue (arrêt)." if isinstance(e, StopBot) else "Action bloquée par Instagram."
             await db.add_history(url, author, tag, "Erreur", msg, comment, caption=caption, actions=report)
